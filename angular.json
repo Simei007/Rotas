@@ -6,7 +6,7 @@
   },
   "newProjectRoot": "projects",
   "projects": {
-    "rtotas": {
+    "rotas": {
       "projectType": "application",
       "schematics": {
         "@schematics/angular:component": {
@@ -62,10 +62,10 @@
           "builder": "@angular/build:dev-server",
           "configurations": {
             "production": {
-              "buildTarget": "rtotas:build:production"
+              "buildTarget": "rotas:build:production"
             },
             "development": {
-              "buildTarget": "rtotas:build:development"
+              "buildTarget": "rotas:build:development"
             }
           },
           "defaultConfiguration": "development"

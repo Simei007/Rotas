@@ -1,7 +1,7 @@
 {
   "id": "./",
-  "name": "Rtotas - Gravador de Rotas",
-  "short_name": "Rtotas",
+  "name": "Rotas - Gravador de Rotas",
+  "short_name": "Rotas",
   "description": "Aplicativo para gravacao de rotas em tempo real com geolocalizacao.",
   "lang": "pt-BR",
   "display": "standalone",

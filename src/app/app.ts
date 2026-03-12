@@ -95,7 +95,7 @@ export class App implements OnInit, OnDestroy, AfterViewInit {
   private readonly followZoomLevel = 18;
   private readonly reviewTickMs = 700;
   private readonly navigationArrivalThresholdMeters = 20;
-  private readonly storageKey = 'rtotas.route-session.v1';
+  private readonly storageKey = 'rotas.route-session.v1';
   private deferredInstallPrompt: BeforeInstallPromptEvent | null = null;
   private displayModeQuery: MediaQueryList | null = null;
   private wakeLockSentinel: WakeLockSentinelLike | null = null;

@@ -1,4 +1,4 @@
-# Rtotas
+# Rotas
 
 This project was generated using [Angular CLI](https://github.com/angular/angular-cli) version 21.1.4.
 
@@ -46,7 +46,7 @@ The project is configured as a PWA (Web App Manifest + Service Worker).
 npm run build
 ```
 
-2. Publish the `dist/rtotas/browser` folder on an HTTPS host.
+2. Publish the `dist/rotas/browser` folder on an HTTPS host.
 Localhost is accepted for local tests, but installation on another device requires HTTPS.
 
 3. Install:
