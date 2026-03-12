@@ -8,13 +8,21 @@
   </header>
 
   <section class="controls">
-    <button class="primary" type="button" (click)="startRecording()" [disabled]="isRecording() || !hasGeolocation">
+    <button
+      class="primary compact-btn"
+      type="button"
+      (click)="startRecording()"
+      [disabled]="isRecording() || !hasGeolocation || isNavigating()">
       Gravar rota
     </button>
-    <button class="danger" type="button" (click)="stopRecording()" [disabled]="!isRecording()">
+    <button class="danger compact-btn" type="button" (click)="stopRecording()" [disabled]="!isRecording()">
       Parar
     </button>
-    <button class="neutral" type="button" (click)="clearRoute()" [disabled]="isRecording() || pointCount() === 0">
+    <button
+      class="neutral compact-btn"
+      type="button"
+      (click)="clearRoute()"
+      [disabled]="isRecording() || isNavigating() || pointCount() === 0">
       Limpar
     </button>
   </section>
@@ -51,10 +59,20 @@
     </section>
   }
 
+  @if (wakeLockMessage()) {
+    <section class="message warning">
+      {{ wakeLockMessage() }}
+    </section>
+  }
+
   <section class="stats">
     <article class="stat">
       <h2>Status</h2>
-      <p class="value">{{ isRecording() ? 'Gravando em tempo real' : 'Parado' }}</p>
+      <p class="value">
+        {{
+          isRecording() ? 'Gravando em tempo real' : (isNavigating() ? 'Navegando rota' : (isReviewing() ? 'Revisando rota' : 'Parado'))
+        }}
+      </p>
     </article>
     <article class="stat">
       <h2>Pontos coletados</h2>
@@ -74,34 +92,66 @@
     <div class="map-header">
       <h2>Trajeto capturado</h2>
       <div class="map-actions">
-        <button class="neutral map-btn" type="button" (click)="centerOnCurrentLocation()">
+        <button class="neutral map-btn compact-btn" type="button" (click)="centerOnCurrentLocation()">
           Aproximar localizacao
         </button>
         <button
-          class="neutral map-btn"
+          class="neutral map-btn compact-btn"
           type="button"
           (click)="toggleFollowCurrentLocation()"
           [class.follow-active]="followCurrentLocation()"
           [attr.aria-pressed]="followCurrentLocation()">
           {{ followCurrentLocation() ? 'Seguindo localizacao' : 'Seguir localizacao' }}
         </button>
-        <button class="neutral map-btn" type="button" (click)="toggleMapExpanded()">
+        <button class="neutral map-btn compact-btn" type="button" (click)="toggleMapExpanded()">
           {{ isMapExpanded() ? 'Restaurar mapa' : 'Maximizar mapa' }}
         </button>
       </div>
     </div>
 
     <div class="review-actions">
-      <button class="primary map-btn" type="button" (click)="startReview()" [disabled]="!canReviewRoute()">
+      <button class="primary map-btn compact-btn" type="button" (click)="startReview()" [disabled]="!canReviewRoute()">
         Rever gravacao
       </button>
-      <button class="danger map-btn" type="button" (click)="stopReview()" [disabled]="!isReviewing()">
+      <button class="danger map-btn compact-btn" type="button" (click)="stopReview()" [disabled]="!isReviewing()">
         Parar revisao
       </button>
       @if (reviewProgressMessage()) {
         <p class="review-progress">{{ reviewProgressMessage() }}</p>
       }
     </div>
+
+    <div class="navigation-actions">
+      <button
+        class="primary map-btn compact-btn"
+        type="button"
+        (click)="startNavigation('forward')"
+        [disabled]="!canNavigateRoute()">
+        Navegar ida
+      </button>
+      <button
+        class="neutral map-btn compact-btn"
+        type="button"
+        (click)="startNavigation('reverse')"
+        [disabled]="!canNavigateRoute()">
+        Navegar volta
+      </button>
+      <button class="danger map-btn compact-btn" type="button" (click)="stopNavigation()" [disabled]="!isNavigating()">
+        Parar navegacao
+      </button>
+      @if (supportsVoiceGuidance()) {
+        <button class="neutral map-btn compact-btn" type="button" (click)="toggleVoiceGuidance()">
+          {{ voiceGuidanceEnabled() ? 'Voz ligada' : 'Voz desligada' }}
+        </button>
+      }
+      @if (navigationProgressMessage()) {
+        <p class="navigation-progress">{{ navigationProgressMessage() }}</p>
+      }
+    </div>
+
+    @if (navigationStatusMessage()) {
+      <p class="navigation-status">{{ navigationStatusMessage() }}</p>
+    }
 
     <div #mapContainer class="real-map" role="img" aria-label="Mapa da rota em tempo real"></div>
     @if (pointCount() === 0) {

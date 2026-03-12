@@ -28,6 +28,20 @@ interface BeforeInstallPromptEvent extends Event {
 }
 
 type InstallPlatform = 'android' | 'ios' | 'desktop' | 'unknown';
+type NavigationDirection = 'forward' | 'reverse';
+
+interface PersistedRouteSession {
+  points: RoutePoint[];
+  startedAt: number | null;
+  endedAt: number | null;
+  pointSeq: number;
+}
+
+interface WakeLockSentinelLike {
+  released: boolean;
+  release(): Promise<void>;
+  addEventListener?: (type: 'release', listener: () => void) => void;
+}
 
 @Component({
   selector: 'app-root',
@@ -56,12 +70,19 @@ export class App implements OnInit, OnDestroy, AfterViewInit {
   protected readonly followCurrentLocation = signal(true);
   protected readonly isReviewing = signal(false);
   protected readonly reviewPointIndex = signal(0);
+  protected readonly isNavigating = signal(false);
+  protected readonly navigationDirection = signal<NavigationDirection>('forward');
+  protected readonly navigationPointIndex = signal(0);
+  protected readonly navigationStatusMessage = signal<string | null>(null);
+  protected readonly wakeLockMessage = signal<string | null>(null);
+  protected readonly voiceGuidanceEnabled = signal(true);
 
   private readonly startedAt = signal<number | null>(null);
   private readonly endedAt = signal<number | null>(null);
   private readonly now = signal(Date.now());
 
   private watchId: number | null = null;
+  private navigationWatchId: number | null = null;
   private timerId: ReturnType<typeof setInterval> | null = null;
   private reviewTimerId: ReturnType<typeof setInterval> | null = null;
   private pointSeq = 0;
@@ -72,8 +93,12 @@ export class App implements OnInit, OnDestroy, AfterViewInit {
   private readonly initialCenter: L.LatLngTuple = [-23.55052, -46.633308];
   private readonly followZoomLevel = 18;
   private readonly reviewTickMs = 700;
+  private readonly navigationArrivalThresholdMeters = 20;
+  private readonly storageKey = 'rtotas.route-session.v1';
   private deferredInstallPrompt: BeforeInstallPromptEvent | null = null;
   private displayModeQuery: MediaQueryList | null = null;
+  private wakeLockSentinel: WakeLockSentinelLike | null = null;
+  private navigationInitialized = false;
 
   private readonly handleBeforeInstallPrompt = (event: Event): void => {
     const promptEvent = event as BeforeInstallPromptEvent;
@@ -111,6 +136,16 @@ export class App implements OnInit, OnDestroy, AfterViewInit {
     this.scheduleMapResize();
   };
 
+  private readonly handleVisibilityChange = (): void => {
+    if (typeof document === 'undefined' || document.visibilityState !== 'visible') {
+      return;
+    }
+
+    if (this.isRecording() || this.isNavigating()) {
+      void this.requestWakeLock();
+    }
+  };
+
   protected readonly pointCount = computed(() => this.routePoints().length);
 
   protected readonly totalDistanceMeters = computed(() => {
@@ -140,6 +175,14 @@ export class App implements OnInit, OnDestroy, AfterViewInit {
   protected readonly canReviewRoute = computed(
     () => this.routePoints().length > 1 && !this.isRecording() && !this.isReviewing()
   );
+  protected readonly canNavigateRoute = computed(
+    () =>
+      this.routePoints().length > 1 &&
+      !this.isRecording() &&
+      !this.isReviewing() &&
+      !this.isNavigating() &&
+      this.hasGeolocation
+  );
   protected readonly reviewProgressMessage = computed(() => {
     if (!this.isReviewing()) {
       return null;
@@ -149,6 +192,19 @@ export class App implements OnInit, OnDestroy, AfterViewInit {
     const current = Math.min(this.reviewPointIndex() + 1, total);
     return `Revisando ponto ${current} de ${total}.`;
   });
+  protected readonly navigationProgressMessage = computed(() => {
+    if (!this.isNavigating()) {
+      return null;
+    }
+
+    const total = this.routePoints().length;
+    const current = Math.min(this.navigationPointIndex() + 1, total);
+    const direction = this.navigationDirection() === 'forward' ? 'ida' : 'volta';
+    return `Navegacao ${direction}: ponto ${current} de ${total}.`;
+  });
+  protected readonly supportsVoiceGuidance = computed(
+    () => typeof window !== 'undefined' && 'speechSynthesis' in window
+  );
   protected readonly installHelpMessage = computed(() => {
     if (this.isInstalled()) {
       return 'Aplicativo ja instalado neste dispositivo.';
@@ -183,6 +239,7 @@ export class App implements OnInit, OnDestroy, AfterViewInit {
   });
 
   ngOnInit(): void {
+    this.restorePersistedSession();
     this.updateInstallState();
     this.installPlatform.set(this.detectInstallPlatform());
 
@@ -204,16 +261,21 @@ export class App implements OnInit, OnDestroy, AfterViewInit {
 
     if (typeof document !== 'undefined') {
       document.addEventListener('fullscreenchange', this.handleFullscreenChange);
+      document.addEventListener('visibilitychange', this.handleVisibilityChange);
     }
   }
 
   ngAfterViewInit(): void {
     this.initializeMap();
+    this.hydrateMapFromStoredRoute();
   }
 
   ngOnDestroy(): void {
     this.stopReviewPlayback(false);
+    this.stopNavigation(false);
     this.stopLocationTracking();
+    void this.releaseWakeLock();
+    this.cancelSpeech();
     this.destroyMap();
     this.setBodyScrollLock(false);
 
@@ -237,6 +299,7 @@ export class App implements OnInit, OnDestroy, AfterViewInit {
 
       if (typeof document !== 'undefined') {
         document.removeEventListener('fullscreenchange', this.handleFullscreenChange);
+        document.removeEventListener('visibilitychange', this.handleVisibilityChange);
       }
     }
   }
@@ -384,14 +447,80 @@ export class App implements OnInit, OnDestroy, AfterViewInit {
     this.stopReviewPlayback(false);
   }
 
+  protected startNavigation(direction: NavigationDirection): void {
+    if (!this.canNavigateRoute()) {
+      return;
+    }
+
+    this.stopReviewPlayback(false);
+    this.stopNavigation(false);
+    this.navigationDirection.set(direction);
+    this.navigationPointIndex.set(0);
+    this.navigationStatusMessage.set('Navegacao iniciada. Aguarde sinal de localizacao.');
+    this.isNavigating.set(true);
+    this.navigationInitialized = false;
+    this.cancelSpeech();
+    this.speakMessage(`Navegacao ${direction === 'forward' ? 'de ida' : 'de volta'} iniciada.`);
+    void this.requestWakeLock();
+
+    try {
+      this.navigationWatchId = navigator.geolocation.watchPosition(
+        (position) => this.handleNavigationPosition(position),
+        (error) => this.handlePositionError(error),
+        {
+          enableHighAccuracy: true,
+          maximumAge: 0,
+          timeout: 15000
+        }
+      );
+    } catch {
+      this.navigationStatusMessage.set('Nao foi possivel iniciar a navegacao neste dispositivo.');
+      this.stopNavigation(false);
+    }
+  }
+
+  protected stopNavigation(notify: boolean = true): void {
+    if (this.navigationWatchId !== null && this.hasGeolocation) {
+      navigator.geolocation.clearWatch(this.navigationWatchId);
+      this.navigationWatchId = null;
+    }
+
+    if (!this.isNavigating()) {
+      void this.syncWakeLockState();
+      return;
+    }
+
+    this.isNavigating.set(false);
+    this.navigationInitialized = false;
+
+    if (notify) {
+      this.navigationStatusMessage.set('Navegacao encerrada.');
+      this.speakMessage('Navegacao encerrada.');
+    }
+
+    void this.syncWakeLockState();
+  }
+
+  protected toggleVoiceGuidance(): void {
+    const next = !this.voiceGuidanceEnabled();
+    this.voiceGuidanceEnabled.set(next);
+
+    if (!next) {
+      this.cancelSpeech();
+    }
+  }
+
   protected startRecording(): void {
     if (!this.hasGeolocation || this.isRecording()) {
       return;
     }
 
     this.stopReviewPlayback(false);
+    this.stopNavigation(false);
+    this.cancelSpeech();
 
     this.errorMessage.set(null);
+    this.navigationStatusMessage.set(null);
     this.routePoints.set([]);
     this.pointSeq = 0;
     this.reviewPointIndex.set(0);
@@ -404,6 +533,8 @@ export class App implements OnInit, OnDestroy, AfterViewInit {
     this.now.set(started);
     this.isRecording.set(true);
     this.startTimer();
+    this.persistSession();
+    void this.requestWakeLock();
 
     try {
       this.watchId = navigator.geolocation.watchPosition(
@@ -429,6 +560,8 @@ export class App implements OnInit, OnDestroy, AfterViewInit {
     this.stopLocationTracking();
     this.endedAt.set(Date.now());
     this.isRecording.set(false);
+    this.persistSession();
+    void this.syncWakeLockState();
   }
 
   protected clearRoute(): void {
@@ -437,13 +570,19 @@ export class App implements OnInit, OnDestroy, AfterViewInit {
     }
 
     this.stopReviewPlayback(false);
+    this.stopNavigation(false);
+    this.cancelSpeech();
     this.routePoints.set([]);
     this.reviewPointIndex.set(0);
+    this.navigationPointIndex.set(0);
     this.startedAt.set(null);
     this.endedAt.set(null);
     this.now.set(Date.now());
     this.errorMessage.set(null);
+    this.navigationStatusMessage.set(null);
     this.resetMapRoute();
+    this.clearPersistedSession();
+    void this.syncWakeLockState();
   }
 
   protected formatCoordinate(value: number): string {
@@ -519,21 +658,87 @@ export class App implements OnInit, OnDestroy, AfterViewInit {
     this.routePoints.update((points) => [...points, point]);
     this.errorMessage.set(null);
     this.updateMapRoute(point);
+    this.persistSession();
+  }
+
+  private handleNavigationPosition(position: GeolocationPosition): void {
+    const navigationPath = this.getNavigationPath();
+    if (navigationPath.length < 2) {
+      this.navigationStatusMessage.set('Rota insuficiente para navegacao.');
+      this.stopNavigation(false);
+      return;
+    }
+
+    const currentPoint: RoutePoint = {
+      id: 0,
+      latitude: position.coords.latitude,
+      longitude: position.coords.longitude,
+      accuracy: position.coords.accuracy,
+      speed:
+        typeof position.coords.speed === 'number' && !Number.isNaN(position.coords.speed)
+          ? position.coords.speed
+          : null,
+      timestamp: position.timestamp
+    };
+
+    this.updateLiveMarker(currentPoint);
+    if (this.followCurrentLocation()) {
+      this.focusMapOnPoint(currentPoint, this.followZoomLevel);
+    }
+
+    if (!this.navigationInitialized) {
+      const closestIndex = this.findClosestPointIndex(navigationPath, currentPoint);
+      this.navigationPointIndex.set(closestIndex);
+      this.navigationInitialized = true;
+      this.navigationStatusMessage.set(
+        `Navegacao ativa. Iniciando do ponto ${closestIndex + 1} de ${navigationPath.length}.`
+      );
+      this.speakMessage(this.createNavigationInstruction(navigationPath, closestIndex));
+      return;
+    }
+
+    const currentIndex = Math.min(this.navigationPointIndex(), navigationPath.length - 1);
+    const targetPoint = navigationPath[currentIndex];
+    const distanceToTarget = this.haversineMeters(currentPoint, targetPoint);
+
+    if (distanceToTarget > this.navigationArrivalThresholdMeters) {
+      return;
+    }
+
+    const nextIndex = currentIndex + 1;
+    if (nextIndex >= navigationPath.length) {
+      this.navigationStatusMessage.set('Trajeto concluido.');
+      this.speakMessage('Trajeto concluido.');
+      this.stopNavigation(false);
+      return;
+    }
+
+    this.navigationPointIndex.set(nextIndex);
+    const instruction = this.createNavigationInstruction(navigationPath, nextIndex);
+    this.navigationStatusMessage.set(instruction);
+    this.speakMessage(instruction);
   }
 
   private handlePositionError(error: GeolocationPositionError): void {
+    const setMessages = (message: string): void => {
+      this.errorMessage.set(message);
+      if (this.isNavigating()) {
+        this.navigationStatusMessage.set(message);
+      }
+    };
+
     switch (error.code) {
       case error.PERMISSION_DENIED:
-        this.errorMessage.set('Permissao de localizacao negada. Ative a permissao para gravar rotas.');
+        setMessages('Permissao de localizacao negada. Ative a permissao para gravar rotas.');
         break;
       case error.POSITION_UNAVAILABLE:
-        this.errorMessage.set('Localizacao indisponivel no momento. Tente novamente em uma area aberta.');
+        setMessages('Localizacao indisponivel no momento. Tente novamente em uma area aberta.');
         break;
       case error.TIMEOUT:
-        this.errorMessage.set('Tempo limite excedido ao buscar localizacao.');
+        setMessages('Tempo limite excedido ao buscar localizacao.');
         break;
       default:
-        this.errorMessage.set('Erro inesperado ao capturar localizacao.');
+        setMessages('Erro inesperado ao capturar localizacao.');
         break;
     }
   }
@@ -555,6 +760,98 @@ export class App implements OnInit, OnDestroy, AfterViewInit {
 
   private toRadians(value: number): number {
     return (value * Math.PI) / 180;
+  }
+
+  private calculateBearing(from: RoutePoint, to: RoutePoint): number {
+    const fromLat = this.toRadians(from.latitude);
+    const toLat = this.toRadians(to.latitude);
+    const deltaLng = this.toRadians(to.longitude - from.longitude);
+
+    const y = Math.sin(deltaLng) * Math.cos(toLat);
+    const x = Math.cos(fromLat) * Math.sin(toLat) - Math.sin(fromLat) * Math.cos(toLat) * Math.cos(deltaLng);
+    const angle = (Math.atan2(y, x) * 180) / Math.PI;
+    return (angle + 360) % 360;
+  }
+
+  private normalizeBearingDelta(nextBearing: number, previousBearing: number): number {
+    return ((nextBearing - previousBearing + 540) % 360) - 180;
+  }
+
+  private getNavigationPath(): RoutePoint[] {
+    const points = this.routePoints();
+    if (this.navigationDirection() === 'reverse') {
+      return [...points].reverse();
+    }
+
+    return points;
+  }
+
+  private findClosestPointIndex(path: RoutePoint[], reference: RoutePoint): number {
+    let closestIndex = 0;
+    let closestDistance = Number.POSITIVE_INFINITY;
+
+    for (let i = 0; i < path.length; i += 1) {
+      const distance = this.haversineMeters(reference, path[i]);
+      if (distance < closestDistance) {
+        closestDistance = distance;
+        closestIndex = i;
+      }
+    }
+
+    return closestIndex;
+  }
+
+  private createNavigationInstruction(path: RoutePoint[], currentIndex: number): string {
+    if (currentIndex >= path.length - 1) {
+      return 'Voce esta no ponto final do trajeto.';
+    }
+
+    const current = path[currentIndex];
+    const next = path[currentIndex + 1];
+    const distanceToNext = this.formatDistance(this.haversineMeters(current, next));
+
+    if (currentIndex === 0) {
+      return `Siga em frente por ${distanceToNext}.`;
+    }
+
+    const previous = path[currentIndex - 1];
+    const previousBearing = this.calculateBearing(previous, current);
+    const nextBearing = this.calculateBearing(current, next);
+    const angle = this.normalizeBearingDelta(nextBearing, previousBearing);
+
+    if (Math.abs(angle) < 20) {
+      return `Continue em frente por ${distanceToNext}.`;
+    }
+
+    if (Math.abs(angle) > 130) {
+      return `Retorne quando possivel e siga por ${distanceToNext}.`;
+    }
+
+    if (angle > 0) {
+      return `Vire a direita e siga por ${distanceToNext}.`;
+    }
+
+    return `Vire a esquerda e siga por ${distanceToNext}.`;
+  }
+
+  private speakMessage(message: string): void {
+    if (!this.voiceGuidanceEnabled() || !this.supportsVoiceGuidance()) {
+      return;
+    }
+
+    this.cancelSpeech();
+    const utterance = new SpeechSynthesisUtterance(message);
+    utterance.lang = 'pt-BR';
+    utterance.rate = 1;
+    window.speechSynthesis.speak(utterance);
+  }
+
+  private cancelSpeech(): void {
+    if (typeof window === 'undefined' || !('speechSynthesis' in window)) {
+      return;
+    }
+
+    window.speechSynthesis.cancel();
   }
 
   private initializeMap(): void {
@@ -705,6 +1002,152 @@ export class App implements OnInit, OnDestroy, AfterViewInit {
   private scheduleMapResize(): void {
     setTimeout(() => this.map?.invalidateSize(), 80);
     setTimeout(() => this.map?.invalidateSize(), 240);
+  }
+
+  private async requestWakeLock(): Promise<void> {
+    if (typeof navigator === 'undefined') {
+      return;
+    }
+
+    const wakeLockNavigator = navigator as Navigator & {
+      wakeLock?: {
+        request(type: 'screen'): Promise<WakeLockSentinelLike>;
+      };
+    };
+
+    if (!wakeLockNavigator.wakeLock) {
+      this.wakeLockMessage.set(
+        'Seu navegador pode pausar a gravacao com a tela desligada. Mantenha a tela ativa.'
+      );
+      return;
+    }
+
+    if (this.wakeLockSentinel && !this.wakeLockSentinel.released) {
+      return;
+    }
+
+    try {
+      this.wakeLockSentinel = await wakeLockNavigator.wakeLock.request('screen');
+      this.wakeLockSentinel.addEventListener?.('release', () => {
+        this.wakeLockSentinel = null;
+      });
+      this.wakeLockMessage.set(null);
+    } catch {
+      this.wakeLockMessage.set(
+        'Nao foi possivel manter a tela ativa automaticamente. Evite bloquear a tela.'
+      );
+    }
+  }
+
+  private async releaseWakeLock(): Promise<void> {
+    if (!this.wakeLockSentinel) {
+      return;
+    }
+
+    try {
+      await this.wakeLockSentinel.release();
+    } catch {
+      // Ignore release failures.
+    } finally {
+      this.wakeLockSentinel = null;
+    }
+  }
+
+  private async syncWakeLockState(): Promise<void> {
+    if (this.isRecording() || this.isNavigating()) {
+      await this.requestWakeLock();
+      return;
+    }
+
+    await this.releaseWakeLock();
+  }
+
+  private persistSession(): void {
+    if (typeof localStorage === 'undefined') {
+      return;
+    }
+
+    const payload: PersistedRouteSession = {
+      points: this.routePoints(),
+      startedAt: this.startedAt(),
+      endedAt: this.endedAt(),
+      pointSeq: this.pointSeq
+    };
+
+    try {
+      localStorage.setItem(this.storageKey, JSON.stringify(payload));
+    } catch {
+      this.errorMessage.set('Falha ao salvar os dados localmente.');
+    }
+  }
+
+  private clearPersistedSession(): void {
+    if (typeof localStorage === 'undefined') {
+      return;
+    }
+
+    localStorage.removeItem(this.storageKey);
+  }
+
+  private restorePersistedSession(): void {
+    if (typeof localStorage === 'undefined') {
+      return;
+    }
+
+    const rawSession = localStorage.getItem(this.storageKey);
+    if (!rawSession) {
+      return;
+    }
+
+    try {
+      const parsed = JSON.parse(rawSession) as PersistedRouteSession;
+      if (!Array.isArray(parsed.points)) {
+        return;
+      }
+
+      const restoredPoints = parsed.points.filter(
+        (point) =>
+          Number.isFinite(point.latitude) &&
+          Number.isFinite(point.longitude) &&
+          Number.isFinite(point.timestamp)
+      );
+
+      this.routePoints.set(restoredPoints);
+      this.pointSeq =
+        typeof parsed.pointSeq === 'number' && parsed.pointSeq >= restoredPoints.length
+          ? parsed.pointSeq
+          : restoredPoints.length;
+      const restoredStartedAt = typeof parsed.startedAt === 'number' ? parsed.startedAt : null;
+      const restoredEndedAt = typeof parsed.endedAt === 'number' ? parsed.endedAt : null;
+      this.startedAt.set(restoredStartedAt);
+      this.endedAt.set(
+        restoredStartedAt !== null && restoredEndedAt === null ? Date.now() : restoredEndedAt
+      );
+      this.now.set(Date.now());
+
+      if (restoredPoints.length > 0) {
+        this.navigationStatusMessage.set('Percurso restaurado do armazenamento local.');
+      }
+    } catch {
+      this.clearPersistedSession();
+    }
+  }
+
+  private hydrateMapFromStoredRoute(): void {
+    const points = this.routePoints();
+    if (!this.map || !this.routeLine || points.length === 0) {
+      return;
+    }
+
+    const latLngs = points.map((point) => this.toLatLng(point));
+    this.routeLine.setLatLngs(latLngs);
+    this.updateLiveMarker(points[points.length - 1]);
+    this.hasCenteredOnRoute = true;
+
+    const bounds = this.routeLine.getBounds();
+    if (bounds.isValid()) {
+      this.map.fitBounds(bounds.pad(0.12), { animate: false, maxZoom: this.followZoomLevel });
+    }
   }
 
   private updateInstallState(): void {

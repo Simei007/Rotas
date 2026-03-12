@@ -34,16 +34,22 @@
 .controls {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.7rem;
+  gap: 0.55rem;
 }
 
 button {
   border: 0;
   border-radius: 10px;
-  padding: 0.7rem 1.15rem;
+  padding: 0.58rem 0.92rem;
   font-weight: 600;
   cursor: pointer;
   transition: transform 0.14s ease, box-shadow 0.14s ease;
+  line-height: 1.2;
+}
+
+.compact-btn {
+  padding: 0.48rem 0.78rem;
+  font-size: 0.84rem;
 }
 
 button:hover:not(:disabled) {
@@ -147,7 +153,8 @@ button:disabled {
 }
 
 .map-actions,
-.review-actions {
+.review-actions,
+.navigation-actions {
   display: flex;
   flex-wrap: wrap;
   gap: 0.55rem;
@@ -166,9 +173,17 @@ button:disabled {
 }
 
 .review-progress {
+.navigation-progress {
   margin: 0;
   color: #4e5966;
-  font-size: 0.9rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.navigation-status {
+  margin: 0;
+  color: #2d3e50;
+  font-size: 0.88rem;
   font-weight: 600;
 }
 
@@ -186,7 +201,7 @@ button:disabled {
 
 .real-map {
   width: 100%;
-  height: 320px;
+  height: clamp(360px, 58vh, 640px);
   border-radius: 10px;
   border: 1px solid #dbe4ec;
   overflow: hidden;
@@ -203,7 +218,7 @@ button:disabled {
 }
 
 .map-panel.expanded .real-map {
-  height: calc(100vh - 200px);
+  height: calc(100vh - 240px);
   min-height: 320px;
   border-radius: 14px;
 }
@@ -216,7 +231,7 @@ button:disabled {
 }
 
 .map-panel:fullscreen .real-map {
-  height: calc(100vh - 210px);
+  height: calc(100vh - 250px);
   min-height: 320px;
   border-radius: 12px;
 }
@@ -229,7 +244,7 @@ button:disabled {
 }
 
 .map-panel:-webkit-full-screen .real-map {
-  height: calc(100vh - 210px);
+  height: calc(100vh - 250px);
   min-height: 320px;
   border-radius: 12px;
 }
@@ -277,18 +292,23 @@ button:disabled {
   }
 
   .map-actions,
-  .review-actions {
+  .review-actions,
+  .navigation-actions {
     width: 100%;
     display: grid;
     grid-template-columns: 1fr;
   }
 
+  .real-map {
+    height: min(64vh, 540px);
+  }
+
   .map-panel.expanded .real-map {
-    height: calc(100vh - 270px);
+    height: calc(100vh - 310px);
   }
 
   .map-panel:fullscreen .real-map,
   .map-panel:-webkit-full-screen .real-map {
-    height: calc(100vh - 280px);
+    height: calc(100vh - 320px);
   }
 }
