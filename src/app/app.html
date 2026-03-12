@@ -11,8 +11,8 @@
       </p>
     </div>
 
-    <div class="bar-row">
-      <span class="bar-label">Gravacao</span>
+    <details class="bar-row" open>
+      <summary class="bar-label">Gravacao</summary>
       <div class="bar-actions">
         <button
           class="primary compact-btn"
@@ -35,10 +35,10 @@
           Ver historico
         </button>
       </div>
-    </div>
+    </details>
 
-    <div class="bar-row">
-      <span class="bar-label">Trajeto capturado</span>
+    <details class="bar-row">
+      <summary class="bar-label">Trajeto capturado</summary>
       <div class="bar-actions">
         <button class="neutral compact-btn" type="button" (click)="centerOnCurrentLocation()">
           Aproximar localizacao
@@ -75,7 +75,7 @@
           </button>
         }
       </div>
-    </div>
+    </details>
 
     <div class="status-strip">
       <span class="status-pill">Pontos: {{ pointCount() }}</span>
