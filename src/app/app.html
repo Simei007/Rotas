@@ -1,38 +1,97 @@
 <main class="page">
-  <header class="hero">
-    <h1>{{ appTitle }}</h1>
-    <p>
-      Clique em <strong>Gravar rota</strong> para iniciar a captura da localizacao em tempo real e
-      pare somente quando concluir o trajeto.
-    </p>
-  </header>
+  <section class="top-bar">
+    <div class="bar-head">
+      <h1>{{ appTitle }}</h1>
+      <p class="bar-live">
+        {{
+          isRecording()
+            ? 'Gravando em tempo real'
+            : (isNavigating() ? 'Navegando rota' : (isReviewing() ? 'Revisando rota' : 'Parado'))
+        }}
+      </p>
+    </div>
 
-  <section class="controls">
-    <button
-      class="primary compact-btn"
-      type="button"
-      (click)="startRecording()"
-      [disabled]="isRecording() || !hasGeolocation || isNavigating()">
-      Gravar rota
-    </button>
-    <button class="danger compact-btn" type="button" (click)="stopRecording()" [disabled]="!isRecording()">
-      Parar
-    </button>
-    <button
-      class="neutral compact-btn"
-      type="button"
-      (click)="clearRoute()"
-      [disabled]="isRecording() || isNavigating() || pointCount() === 0">
-      Limpar
-    </button>
-  </section>
+    <div class="bar-row">
+      <span class="bar-label">Gravacao</span>
+      <div class="bar-actions">
+        <button
+          class="primary compact-btn"
+          type="button"
+          (click)="startRecording()"
+          [disabled]="isRecording() || !hasGeolocation || isNavigating()">
+          Gravar rota
+        </button>
+        <button class="danger compact-btn" type="button" (click)="stopRecording()" [disabled]="!isRecording()">
+          Parar
+        </button>
+        <button
+          class="neutral compact-btn"
+          type="button"
+          (click)="clearRoute()"
+          [disabled]="isRecording() || isNavigating() || pointCount() === 0">
+          Limpar
+        </button>
+        <button class="neutral compact-btn" type="button" (click)="openHistory()" [disabled]="isMapExpanded()">
+          Ver historico
+        </button>
+      </div>
+    </div>
 
-  <section class="install-card">
-    <h2>Instalar no dispositivo</h2>
-    <p>{{ installHelpMessage() }}</p>
-    <button class="install" type="button" (click)="installApp()" [disabled]="isInstalled()">
-      {{ isInstalled() ? 'App instalado' : (canTriggerInstall() ? 'Instalar app' : 'Como instalar') }}
-    </button>
+    <div class="bar-row">
+      <span class="bar-label">Trajeto capturado</span>
+      <div class="bar-actions">
+        <button class="neutral compact-btn" type="button" (click)="centerOnCurrentLocation()">
+          Aproximar localizacao
+        </button>
+        <button
+          class="neutral compact-btn"
+          type="button"
+          (click)="toggleFollowCurrentLocation()"
+          [class.follow-active]="followCurrentLocation()"
+          [attr.aria-pressed]="followCurrentLocation()">
+          {{ followCurrentLocation() ? 'Seguindo localizacao' : 'Seguir localizacao' }}
+        </button>
+        <button class="neutral compact-btn" type="button" (click)="toggleMapExpanded()">
+          {{ isMapExpanded() ? 'Restaurar mapa' : 'Maximizar mapa' }}
+        </button>
+        <button class="primary compact-btn" type="button" (click)="startReview()" [disabled]="!canReviewRoute()">
+          Rever gravacao
+        </button>
+        <button class="danger compact-btn" type="button" (click)="stopReview()" [disabled]="!isReviewing()">
+          Parar revisao
+        </button>
+        <button class="primary compact-btn" type="button" (click)="startNavigation('forward')" [disabled]="!canNavigateRoute()">
+          Navegar ida
+        </button>
+        <button class="neutral compact-btn" type="button" (click)="startNavigation('reverse')" [disabled]="!canNavigateRoute()">
+          Navegar volta
+        </button>
+        <button class="danger compact-btn" type="button" (click)="stopNavigation()" [disabled]="!isNavigating()">
+          Parar navegacao
+        </button>
+        @if (supportsVoiceGuidance()) {
+          <button class="neutral compact-btn" type="button" (click)="toggleVoiceGuidance()">
+            {{ voiceGuidanceEnabled() ? 'Voz ligada' : 'Voz desligada' }}
+          </button>
+        }
+      </div>
+    </div>
+
+    <div class="status-strip">
+      <span class="status-pill">Pontos: {{ pointCount() }}</span>
+      <span class="status-pill">Distancia: {{ formatDistance(totalDistanceMeters()) }}</span>
+      <span class="status-pill">Tempo: {{ formatDuration(elapsedMs()) }}</span>
+    </div>
+
+    @if (reviewProgressMessage()) {
+      <p class="bar-note">{{ reviewProgressMessage() }}</p>
+    }
+    @if (navigationProgressMessage()) {
+      <p class="bar-note">{{ navigationProgressMessage() }}</p>
+    }
+    @if (navigationStatusMessage()) {
+      <p class="bar-note">{{ navigationStatusMessage() }}</p>
+    }
   </section>
 
   @if (installStatusMessage()) {
@@ -65,115 +124,49 @@
     </section>
   }
 
-  <section class="stats">
-    <article class="stat">
-      <h2>Status</h2>
-      <p class="value">
-        {{
-          isRecording() ? 'Gravando em tempo real' : (isNavigating() ? 'Navegando rota' : (isReviewing() ? 'Revisando rota' : 'Parado'))
-        }}
-      </p>
-    </article>
-    <article class="stat">
-      <h2>Pontos coletados</h2>
-      <p class="value">{{ pointCount() }}</p>
-    </article>
-    <article class="stat">
-      <h2>Distancia total</h2>
-      <p class="value">{{ formatDistance(totalDistanceMeters()) }}</p>
-    </article>
-    <article class="stat">
-      <h2>Tempo</h2>
-      <p class="value">{{ formatDuration(elapsedMs()) }}</p>
-    </article>
-  </section>
-
   <section #mapPanel class="map-panel" [class.expanded]="isMapFullscreenFallback()">
-    <div class="map-header">
-      <h2>Trajeto capturado</h2>
-      <div class="map-actions">
-        <button class="neutral map-btn compact-btn" type="button" (click)="centerOnCurrentLocation()">
-          Aproximar localizacao
-        </button>
-        <button
-          class="neutral map-btn compact-btn"
-          type="button"
-          (click)="toggleFollowCurrentLocation()"
-          [class.follow-active]="followCurrentLocation()"
-          [attr.aria-pressed]="followCurrentLocation()">
-          {{ followCurrentLocation() ? 'Seguindo localizacao' : 'Seguir localizacao' }}
-        </button>
-        <button class="neutral map-btn compact-btn" type="button" (click)="toggleMapExpanded()">
-          {{ isMapExpanded() ? 'Restaurar mapa' : 'Maximizar mapa' }}
-        </button>
-      </div>
-    </div>
-
-    <div class="review-actions">
-      <button class="primary map-btn compact-btn" type="button" (click)="startReview()" [disabled]="!canReviewRoute()">
-        Rever gravacao
-      </button>
-      <button class="danger map-btn compact-btn" type="button" (click)="stopReview()" [disabled]="!isReviewing()">
-        Parar revisao
-      </button>
-      @if (reviewProgressMessage()) {
-        <p class="review-progress">{{ reviewProgressMessage() }}</p>
-      }
-    </div>
-
-    <div class="navigation-actions">
-      <button
-        class="primary map-btn compact-btn"
-        type="button"
-        (click)="startNavigation('forward')"
-        [disabled]="!canNavigateRoute()">
-        Navegar ida
-      </button>
-      <button
-        class="neutral map-btn compact-btn"
-        type="button"
-        (click)="startNavigation('reverse')"
-        [disabled]="!canNavigateRoute()">
-        Navegar volta
-      </button>
-      <button class="danger map-btn compact-btn" type="button" (click)="stopNavigation()" [disabled]="!isNavigating()">
-        Parar navegacao
-      </button>
-      @if (supportsVoiceGuidance()) {
-        <button class="neutral map-btn compact-btn" type="button" (click)="toggleVoiceGuidance()">
-          {{ voiceGuidanceEnabled() ? 'Voz ligada' : 'Voz desligada' }}
-        </button>
-      }
-      @if (navigationProgressMessage()) {
-        <p class="navigation-progress">{{ navigationProgressMessage() }}</p>
-      }
-    </div>
-
-    @if (navigationStatusMessage()) {
-      <p class="navigation-status">{{ navigationStatusMessage() }}</p>
-    }
-
     <div #mapContainer class="real-map" role="img" aria-label="Mapa da rota em tempo real"></div>
     @if (pointCount() === 0) {
       <p class="empty map-note">Aguardando inicio da gravacao para desenhar a rota.</p>
     }
   </section>
 
-  <section class="details">
-    <h2>Posicoes recentes</h2>
-    @if (pointCount() === 0) {
-      <p class="empty">Nenhum ponto gravado.</p>
-    } @else {
-      <ul>
-        @for (point of recentPoints(); track point.id) {
-          <li>
-            <span>{{ formatTime(point.timestamp) }}</span>
-            <span>Lat: {{ formatCoordinate(point.latitude) }}</span>
-            <span>Lng: {{ formatCoordinate(point.longitude) }}</span>
-            <span>Precisao: {{ point.accuracy.toFixed(0) }} m</span>
-          </li>
-        }
-      </ul>
-    }
+  <section class="install-card">
+    <h2>Instalar no dispositivo</h2>
+    <p>{{ installHelpMessage() }}</p>
+    <button class="install compact-btn" type="button" (click)="installApp()" [disabled]="isInstalled()">
+      {{ isInstalled() ? 'App instalado' : (canTriggerInstall() ? 'Instalar app' : 'Como instalar') }}
+    </button>
   </section>
 </main>
+
+@if (isHistoryOpen()) {
+  <section class="history-overlay" (click)="closeHistory()">
+    <article
+      class="history-modal"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Historico de posicoes"
+      (click)="$event.stopPropagation()">
+      <div class="history-header">
+        <h2>Historico de posicoes</h2>
+        <button class="neutral compact-btn" type="button" (click)="closeHistory()">Fechar</button>
+      </div>
+
+      @if (pointCount() === 0) {
+        <p class="empty">Nenhum ponto gravado.</p>
+      } @else {
+        <ul class="history-list">
+          @for (point of historyPoints(); track point.id) {
+            <li>
+              <span>{{ formatTime(point.timestamp) }}</span>
+              <span>Lat: {{ formatCoordinate(point.latitude) }}</span>
+              <span>Lng: {{ formatCoordinate(point.longitude) }}</span>
+              <span>Precisao: {{ point.accuracy.toFixed(0) }} m</span>
+            </li>
+          }
+        </ul>
+      }
+    </article>
+  </section>
+}

@@ -76,6 +76,7 @@ export class App implements OnInit, OnDestroy, AfterViewInit {
   protected readonly navigationStatusMessage = signal<string | null>(null);
   protected readonly wakeLockMessage = signal<string | null>(null);
   protected readonly voiceGuidanceEnabled = signal(true);
+  protected readonly isHistoryOpen = signal(false);
 
   private readonly startedAt = signal<number | null>(null);
   private readonly endedAt = signal<number | null>(null);
@@ -130,9 +131,9 @@ export class App implements OnInit, OnDestroy, AfterViewInit {
 
     if (isPanelFullscreen) {
       this.isMapFullscreenFallback.set(false);
-      this.setBodyScrollLock(false);
     }
 
+    this.updateBodyScrollLockState();
     this.scheduleMapResize();
   };
 
@@ -143,6 +144,12 @@ export class App implements OnInit, OnDestroy, AfterViewInit {
 
     if (this.isRecording() || this.isNavigating()) {
       void this.requestWakeLock();
+    }
+  };
+
+  private readonly handleGlobalKeydown = (event: KeyboardEvent): void => {
+    if (event.key === 'Escape' && this.isHistoryOpen()) {
+      this.closeHistory();
     }
   };
 
@@ -172,6 +179,7 @@ export class App implements OnInit, OnDestroy, AfterViewInit {
   });
 
   protected readonly recentPoints = computed(() => this.routePoints().slice(-10).reverse());
+  protected readonly historyPoints = computed(() => [...this.routePoints()].reverse());
   protected readonly canReviewRoute = computed(
     () => this.routePoints().length > 1 && !this.isRecording() && !this.isReviewing()
   );
@@ -262,6 +270,7 @@ export class App implements OnInit, OnDestroy, AfterViewInit {
     if (typeof document !== 'undefined') {
       document.addEventListener('fullscreenchange', this.handleFullscreenChange);
       document.addEventListener('visibilitychange', this.handleVisibilityChange);
+      document.addEventListener('keydown', this.handleGlobalKeydown);
     }
   }
 
@@ -300,6 +309,7 @@ export class App implements OnInit, OnDestroy, AfterViewInit {
       if (typeof document !== 'undefined') {
         document.removeEventListener('fullscreenchange', this.handleFullscreenChange);
         document.removeEventListener('visibilitychange', this.handleVisibilityChange);
+        document.removeEventListener('keydown', this.handleGlobalKeydown);
       }
     }
   }
@@ -334,9 +344,23 @@ export class App implements OnInit, OnDestroy, AfterViewInit {
     }
   }
 
+  protected openHistory(): void {
+    this.isHistoryOpen.set(true);
+    this.updateBodyScrollLockState();
+  }
+
+  protected closeHistory(): void {
+    this.isHistoryOpen.set(false);
+    this.updateBodyScrollLockState();
+  }
+
   protected async toggleMapExpanded(): Promise<void> {
     if (typeof document === 'undefined') {
       return;
+    }
+
+    if (this.isHistoryOpen()) {
+      this.closeHistory();
     }
 
     const panel = this.mapPanel?.nativeElement;
@@ -367,7 +391,7 @@ export class App implements OnInit, OnDestroy, AfterViewInit {
 
     const nextFallbackValue = !this.isMapFullscreenFallback();
     this.isMapFullscreenFallback.set(nextFallbackValue);
-    this.setBodyScrollLock(nextFallbackValue);
+    this.updateBodyScrollLockState();
     this.scheduleMapResize();
   }
 
@@ -997,6 +1021,10 @@ export class App implements OnInit, OnDestroy, AfterViewInit {
     }
 
     document.body.style.overflow = shouldLock ? 'hidden' : '';
+  }
+
+  private updateBodyScrollLockState(): void {
+    this.setBodyScrollLock(this.isMapFullscreenFallback() || this.isHistoryOpen());
   }
 
   private scheduleMapResize(): void {
