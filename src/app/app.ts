@@ -1,4 +1,13 @@
-import { AfterViewInit, Component, ElementRef, OnDestroy, ViewChild, computed, signal } from '@angular/core';
+import {
+  AfterViewInit,
+  Component,
+  ElementRef,
+  OnDestroy,
+  OnInit,
+  ViewChild,
+  computed,
+  signal
+} from '@angular/core';
 import * as L from 'leaflet';
 
 interface RoutePoint {
@@ -10,12 +19,22 @@ interface RoutePoint {
   timestamp: number;
 }
 
+interface BeforeInstallPromptEvent extends Event {
+  prompt(): Promise<void>;
+  userChoice: Promise<{
+    outcome: 'accepted' | 'dismissed';
+    platform: string;
+  }>;
+}
+
+type InstallPlatform = 'android' | 'ios' | 'desktop' | 'unknown';
+
 @Component({
   selector: 'app-root',
   templateUrl: './app.html',
   styleUrl: './app.scss'
 })
-export class App implements OnDestroy, AfterViewInit {
+export class App implements OnInit, OnDestroy, AfterViewInit {
   @ViewChild('mapContainer') private mapContainer?: ElementRef<HTMLDivElement>;
 
   protected readonly appTitle = 'Gravador de Rotas em Tempo Real';
@@ -24,6 +43,10 @@ export class App implements OnDestroy, AfterViewInit {
   protected readonly isRecording = signal(false);
   protected readonly errorMessage = signal<string | null>(null);
   protected readonly routePoints = signal<RoutePoint[]>([]);
+  protected readonly canTriggerInstall = signal(false);
+  protected readonly installStatusMessage = signal<string | null>(null);
+  protected readonly isInstalled = signal(false);
+  protected readonly installPlatform = signal<InstallPlatform>('unknown');
 
   private readonly startedAt = signal<number | null>(null);
   private readonly endedAt = signal<number | null>(null);
@@ -37,6 +60,27 @@ export class App implements OnDestroy, AfterViewInit {
   private liveMarker: L.CircleMarker | null = null;
   private hasCenteredOnRoute = false;
   private readonly initialCenter: L.LatLngTuple = [-23.55052, -46.633308];
+  private deferredInstallPrompt: BeforeInstallPromptEvent | null = null;
+  private displayModeQuery: MediaQueryList | null = null;
+
+  private readonly handleBeforeInstallPrompt = (event: Event): void => {
+    const promptEvent = event as BeforeInstallPromptEvent;
+    promptEvent.preventDefault();
+    this.deferredInstallPrompt = promptEvent;
+    this.canTriggerInstall.set(true);
+    this.installStatusMessage.set(null);
+  };
+
+  private readonly handleAppInstalled = (): void => {
+    this.isInstalled.set(true);
+    this.canTriggerInstall.set(false);
+    this.deferredInstallPrompt = null;
+    this.installStatusMessage.set('Aplicativo instalado neste dispositivo.');
+  };
+
+  private readonly handleDisplayModeChange = (_event?: MediaQueryListEvent): void => {
+    this.updateInstallState();
+  };
 
   protected readonly pointCount = computed(() => this.routePoints().length);
 
@@ -64,6 +108,59 @@ export class App implements OnDestroy, AfterViewInit {
   });
 
   protected readonly recentPoints = computed(() => this.routePoints().slice(-10).reverse());
+  protected readonly installHelpMessage = computed(() => {
+    if (this.isInstalled()) {
+      return 'Aplicativo ja instalado neste dispositivo.';
+    }
+
+    if (this.canTriggerInstall()) {
+      return 'Clique em "Instalar app" para adicionar no PC ou celular.';
+    }
+
+    switch (this.installPlatform()) {
+      case 'ios':
+        return 'No Safari do iPhone: Compartilhar > Adicionar a Tela de Inicio.';
+      case 'android':
+        return 'No Chrome do Android: menu > Instalar app ou Adicionar a tela inicial.';
+      case 'desktop':
+        return 'No Chrome/Edge: menu do navegador > Instalar app.';
+      default:
+        return 'Use o menu do navegador para instalar este app.';
+    }
+  });
+
+  protected readonly installContextWarning = computed(() => {
+    if (typeof window === 'undefined') {
+      return null;
+    }
+
+    if (window.isSecureContext || window.location.hostname === 'localhost') {
+      return null;
+    }
+
+    return 'A instalacao requer HTTPS ou localhost.';
+  });
+
+  ngOnInit(): void {
+    this.updateInstallState();
+    this.installPlatform.set(this.detectInstallPlatform());
+
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    window.addEventListener('beforeinstallprompt', this.handleBeforeInstallPrompt);
+    window.addEventListener('appinstalled', this.handleAppInstalled);
+    this.displayModeQuery = window.matchMedia('(display-mode: standalone)');
+    try {
+      this.displayModeQuery.addEventListener('change', this.handleDisplayModeChange);
+    } catch {
+      const legacyQuery = this.displayModeQuery as MediaQueryList & {
+        addListener?: (listener: (event: MediaQueryListEvent) => void) => void;
+      };
+      legacyQuery.addListener?.(this.handleDisplayModeChange);
+    }
+  }
 
   ngAfterViewInit(): void {
     this.initializeMap();
@@ -72,6 +169,50 @@ export class App implements OnDestroy, AfterViewInit {
   ngOnDestroy(): void {
     this.stopLocationTracking();
     this.destroyMap();
+    if (typeof window !== 'undefined') {
+      window.removeEventListener('beforeinstallprompt', this.handleBeforeInstallPrompt);
+      window.removeEventListener('appinstalled', this.handleAppInstalled);
+      if (this.displayModeQuery) {
+        try {
+          this.displayModeQuery.removeEventListener('change', this.handleDisplayModeChange);
+        } catch {
+          const legacyQuery = this.displayModeQuery as MediaQueryList & {
+            removeListener?: (listener: (event: MediaQueryListEvent) => void) => void;
+          };
+          legacyQuery.removeListener?.(this.handleDisplayModeChange);
+        }
+      }
+    }
+  }
+
+  protected async installApp(): Promise<void> {
+    if (this.isInstalled()) {
+      this.installStatusMessage.set('Aplicativo ja instalado neste dispositivo.');
+      return;
+    }
+
+    if (!this.deferredInstallPrompt) {
+      this.installStatusMessage.set(
+        'Instalacao automatica indisponivel nesta sessao. Use o menu do navegador.'
+      );
+      return;
+    }
+
+    const promptEvent = this.deferredInstallPrompt;
+    this.deferredInstallPrompt = null;
+    this.canTriggerInstall.set(false);
+
+    try {
+      await promptEvent.prompt();
+      const choice = await promptEvent.userChoice;
+      if (choice.outcome === 'accepted') {
+        this.installStatusMessage.set('Instalacao iniciada pelo navegador.');
+      } else {
+        this.installStatusMessage.set('Instalacao cancelada. Voce pode tentar novamente.');
+      }
+    } catch {
+      this.installStatusMessage.set('Nao foi possivel abrir o instalador. Use o menu do navegador.');
+    }
   }
 
   protected startRecording(): void {
@@ -321,5 +462,42 @@ export class App implements OnDestroy, AfterViewInit {
       this.routeLine = null;
       this.liveMarker = null;
     }
+  }
+
+  private updateInstallState(): void {
+    if (typeof window === 'undefined') {
+      this.isInstalled.set(false);
+      return;
+    }
+
+    const standaloneFromDisplayMode = window.matchMedia('(display-mode: standalone)').matches;
+    const standaloneFromNavigator =
+      typeof navigator !== 'undefined' &&
+      'standalone' in navigator &&
+      Boolean((navigator as Navigator & { standalone?: boolean }).standalone);
+
+    this.isInstalled.set(standaloneFromDisplayMode || standaloneFromNavigator);
+  }
+
+  private detectInstallPlatform(): InstallPlatform {
+    if (typeof navigator === 'undefined') {
+      return 'unknown';
+    }
+
+    const userAgent = navigator.userAgent.toLowerCase();
+
+    if (/(iphone|ipad|ipod)/.test(userAgent)) {
+      return 'ios';
+    }
+
+    if (/android/.test(userAgent)) {
+      return 'android';
+    }
+
+    if (/(windows|macintosh|linux)/.test(userAgent)) {
+      return 'desktop';
+    }
+
+    return 'unknown';
   }
 }

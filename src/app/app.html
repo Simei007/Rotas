@@ -19,6 +19,26 @@
     </button>
   </section>
 
+  <section class="install-card">
+    <h2>Instalar no dispositivo</h2>
+    <p>{{ installHelpMessage() }}</p>
+    <button class="install" type="button" (click)="installApp()" [disabled]="isInstalled()">
+      {{ isInstalled() ? 'App instalado' : (canTriggerInstall() ? 'Instalar app' : 'Como instalar') }}
+    </button>
+  </section>
+
+  @if (installStatusMessage()) {
+    <section class="message warning">
+      {{ installStatusMessage() }}
+    </section>
+  }
+
+  @if (installContextWarning()) {
+    <section class="message warning">
+      {{ installContextWarning() }}
+    </section>
+  }
+
   @if (!hasGeolocation) {
     <section class="message warning">
       Este navegador nao oferece suporte a geolocalizacao.

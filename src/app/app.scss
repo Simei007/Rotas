@@ -117,7 +117,8 @@ button:disabled {
 }
 
 .map-panel,
-.details {
+.details,
+.install-card {
   background: #ffffff;
   border: 1px solid #d7e0e8;
   border-radius: 12px;
@@ -125,9 +126,22 @@ button:disabled {
 }
 
 .map-panel h2,
-.details h2 {
+.details h2,
+.install-card h2 {
   margin: 0 0 0.65rem;
   font-size: 1rem;
+}
+
+.install-card p {
+  margin: 0 0 0.75rem;
+  color: #1f2b36;
+  line-height: 1.4;
+}
+
+.install {
+  background: #2454d3;
+  color: #ffffff;
+  box-shadow: 0 5px 12px rgba(36, 84, 211, 0.28);
 }
 
 .real-map {
