@@ -70,8 +70,39 @@
     </article>
   </section>
 
-  <section class="map-panel">
-    <h2>Trajeto capturado</h2>
+  <section #mapPanel class="map-panel" [class.expanded]="isMapFullscreenFallback()">
+    <div class="map-header">
+      <h2>Trajeto capturado</h2>
+      <div class="map-actions">
+        <button class="neutral map-btn" type="button" (click)="centerOnCurrentLocation()">
+          Aproximar localizacao
+        </button>
+        <button
+          class="neutral map-btn"
+          type="button"
+          (click)="toggleFollowCurrentLocation()"
+          [class.follow-active]="followCurrentLocation()"
+          [attr.aria-pressed]="followCurrentLocation()">
+          {{ followCurrentLocation() ? 'Seguindo localizacao' : 'Seguir localizacao' }}
+        </button>
+        <button class="neutral map-btn" type="button" (click)="toggleMapExpanded()">
+          {{ isMapExpanded() ? 'Restaurar mapa' : 'Maximizar mapa' }}
+        </button>
+      </div>
+    </div>
+
+    <div class="review-actions">
+      <button class="primary map-btn" type="button" (click)="startReview()" [disabled]="!canReviewRoute()">
+        Rever gravacao
+      </button>
+      <button class="danger map-btn" type="button" (click)="stopReview()" [disabled]="!isReviewing()">
+        Parar revisao
+      </button>
+      @if (reviewProgressMessage()) {
+        <p class="review-progress">{{ reviewProgressMessage() }}</p>
+      }
+    </div>
+
     <div #mapContainer class="real-map" role="img" aria-label="Mapa da rota em tempo real"></div>
     @if (pointCount() === 0) {
       <p class="empty map-note">Aguardando inicio da gravacao para desenhar a rota.</p>

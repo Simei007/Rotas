@@ -35,6 +35,7 @@ type InstallPlatform = 'android' | 'ios' | 'desktop' | 'unknown';
   styleUrl: './app.scss'
 })
 export class App implements OnInit, OnDestroy, AfterViewInit {
+  @ViewChild('mapPanel') private mapPanel?: ElementRef<HTMLElement>;
   @ViewChild('mapContainer') private mapContainer?: ElementRef<HTMLDivElement>;
 
   protected readonly appTitle = 'Gravador de Rotas em Tempo Real';
@@ -47,6 +48,14 @@ export class App implements OnInit, OnDestroy, AfterViewInit {
   protected readonly installStatusMessage = signal<string | null>(null);
   protected readonly isInstalled = signal(false);
   protected readonly installPlatform = signal<InstallPlatform>('unknown');
+  protected readonly isMapNativeFullscreen = signal(false);
+  protected readonly isMapFullscreenFallback = signal(false);
+  protected readonly isMapExpanded = computed(
+    () => this.isMapNativeFullscreen() || this.isMapFullscreenFallback()
+  );
+  protected readonly followCurrentLocation = signal(true);
+  protected readonly isReviewing = signal(false);
+  protected readonly reviewPointIndex = signal(0);
 
   private readonly startedAt = signal<number | null>(null);
   private readonly endedAt = signal<number | null>(null);
@@ -54,12 +63,15 @@ export class App implements OnInit, OnDestroy, AfterViewInit {
 
   private watchId: number | null = null;
   private timerId: ReturnType<typeof setInterval> | null = null;
+  private reviewTimerId: ReturnType<typeof setInterval> | null = null;
   private pointSeq = 0;
   private map: L.Map | null = null;
   private routeLine: L.Polyline | null = null;
   private liveMarker: L.CircleMarker | null = null;
   private hasCenteredOnRoute = false;
   private readonly initialCenter: L.LatLngTuple = [-23.55052, -46.633308];
+  private readonly followZoomLevel = 18;
+  private readonly reviewTickMs = 700;
   private deferredInstallPrompt: BeforeInstallPromptEvent | null = null;
   private displayModeQuery: MediaQueryList | null = null;
 
@@ -80,6 +92,23 @@ export class App implements OnInit, OnDestroy, AfterViewInit {
 
   private readonly handleDisplayModeChange = (_event?: MediaQueryListEvent): void => {
     this.updateInstallState();
+  };
+
+  private readonly handleFullscreenChange = (): void => {
+    if (typeof document === 'undefined') {
+      return;
+    }
+
+    const panel = this.mapPanel?.nativeElement;
+    const isPanelFullscreen = Boolean(panel) && document.fullscreenElement === panel;
+    this.isMapNativeFullscreen.set(isPanelFullscreen);
+
+    if (isPanelFullscreen) {
+      this.isMapFullscreenFallback.set(false);
+      this.setBodyScrollLock(false);
+    }
+
+    this.scheduleMapResize();
   };
 
   protected readonly pointCount = computed(() => this.routePoints().length);
@@ -108,6 +137,18 @@ export class App implements OnInit, OnDestroy, AfterViewInit {
   });
 
   protected readonly recentPoints = computed(() => this.routePoints().slice(-10).reverse());
+  protected readonly canReviewRoute = computed(
+    () => this.routePoints().length > 1 && !this.isRecording() && !this.isReviewing()
+  );
+  protected readonly reviewProgressMessage = computed(() => {
+    if (!this.isReviewing()) {
+      return null;
+    }
+
+    const total = this.routePoints().length;
+    const current = Math.min(this.reviewPointIndex() + 1, total);
+    return `Revisando ponto ${current} de ${total}.`;
+  });
   protected readonly installHelpMessage = computed(() => {
     if (this.isInstalled()) {
       return 'Aplicativo ja instalado neste dispositivo.';
@@ -160,6 +201,10 @@ export class App implements OnInit, OnDestroy, AfterViewInit {
       };
       legacyQuery.addListener?.(this.handleDisplayModeChange);
     }
+
+    if (typeof document !== 'undefined') {
+      document.addEventListener('fullscreenchange', this.handleFullscreenChange);
+    }
   }
 
   ngAfterViewInit(): void {
@@ -167,8 +212,15 @@ export class App implements OnInit, OnDestroy, AfterViewInit {
   }
 
   ngOnDestroy(): void {
+    this.stopReviewPlayback(false);
     this.stopLocationTracking();
     this.destroyMap();
+    this.setBodyScrollLock(false);
+
+    if (typeof document !== 'undefined' && this.mapPanel?.nativeElement === document.fullscreenElement) {
+      void document.exitFullscreen().catch(() => undefined);
+    }
+
     if (typeof window !== 'undefined') {
       window.removeEventListener('beforeinstallprompt', this.handleBeforeInstallPrompt);
       window.removeEventListener('appinstalled', this.handleAppInstalled);
@@ -181,6 +233,10 @@ export class App implements OnInit, OnDestroy, AfterViewInit {
           };
           legacyQuery.removeListener?.(this.handleDisplayModeChange);
         }
+      }
+
+      if (typeof document !== 'undefined') {
+        document.removeEventListener('fullscreenchange', this.handleFullscreenChange);
       }
     }
   }
@@ -215,14 +271,130 @@ export class App implements OnInit, OnDestroy, AfterViewInit {
     }
   }
 
+  protected async toggleMapExpanded(): Promise<void> {
+    if (typeof document === 'undefined') {
+      return;
+    }
+
+    const panel = this.mapPanel?.nativeElement;
+    if (!panel) {
+      return;
+    }
+
+    const supportsFullscreen =
+      typeof panel.requestFullscreen === 'function' && typeof document.exitFullscreen === 'function';
+
+    if (supportsFullscreen) {
+      try {
+        if (document.fullscreenElement === panel) {
+          await document.exitFullscreen();
+          return;
+        }
+
+        if (document.fullscreenElement && document.fullscreenElement !== panel) {
+          await document.exitFullscreen();
+        }
+
+        await panel.requestFullscreen();
+        return;
+      } catch {
+        // If fullscreen API is blocked, use fallback mode.
+      }
+    }
+
+    const nextFallbackValue = !this.isMapFullscreenFallback();
+    this.isMapFullscreenFallback.set(nextFallbackValue);
+    this.setBodyScrollLock(nextFallbackValue);
+    this.scheduleMapResize();
+  }
+
+  protected toggleFollowCurrentLocation(): void {
+    const nextValue = !this.followCurrentLocation();
+    this.followCurrentLocation.set(nextValue);
+
+    if (nextValue) {
+      this.centerOnCurrentLocation();
+    }
+  }
+
+  protected centerOnCurrentLocation(): void {
+    const currentPoint = this.getCurrentMapFocusPoint();
+    if (currentPoint) {
+      this.focusMapOnPoint(currentPoint, this.followZoomLevel);
+      return;
+    }
+
+    if (!this.hasGeolocation || !this.map) {
+      return;
+    }
+
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        const latLng: L.LatLngTuple = [position.coords.latitude, position.coords.longitude];
+        this.map?.setView(latLng, this.followZoomLevel, { animate: true });
+      },
+      () => {
+        this.errorMessage.set('Nao foi possivel centralizar na localizacao atual.');
+      },
+      {
+        enableHighAccuracy: true,
+        maximumAge: 0,
+        timeout: 12000
+      }
+    );
+  }
+
+  protected startReview(): void {
+    if (!this.canReviewRoute()) {
+      return;
+    }
+
+    this.stopReviewPlayback(false);
+    this.isReviewing.set(true);
+    this.reviewPointIndex.set(0);
+
+    const points = this.routePoints();
+    const firstPoint = points[0];
+    this.updateLiveMarker(firstPoint);
+
+    if (this.followCurrentLocation()) {
+      this.focusMapOnPoint(firstPoint, this.followZoomLevel);
+    }
+
+    this.reviewTimerId = setInterval(() => {
+      const route = this.routePoints();
+      const nextIndex = this.reviewPointIndex() + 1;
+
+      if (nextIndex >= route.length) {
+        this.stopReviewPlayback(true);
+        return;
+      }
+
+      this.reviewPointIndex.set(nextIndex);
+      const point = route[nextIndex];
+      this.updateLiveMarker(point);
+
+      if (this.followCurrentLocation()) {
+        this.focusMapOnPoint(point, this.followZoomLevel);
+      }
+    }, this.reviewTickMs);
+  }
+
+  protected stopReview(): void {
+    this.stopReviewPlayback(false);
+  }
+
   protected startRecording(): void {
     if (!this.hasGeolocation || this.isRecording()) {
       return;
     }
 
+    this.stopReviewPlayback(false);
+
     this.errorMessage.set(null);
     this.routePoints.set([]);
     this.pointSeq = 0;
+    this.reviewPointIndex.set(0);
     this.hasCenteredOnRoute = false;
     this.resetMapRoute();
 
@@ -264,7 +436,9 @@ export class App implements OnInit, OnDestroy, AfterViewInit {
       return;
     }
 
+    this.stopReviewPlayback(false);
     this.routePoints.set([]);
+    this.reviewPointIndex.set(0);
     this.startedAt.set(null);
     this.endedAt.set(null);
     this.now.set(Date.now());
@@ -404,7 +578,7 @@ export class App implements OnInit, OnDestroy, AfterViewInit {
       lineJoin: 'round'
     }).addTo(this.map);
 
-    setTimeout(() => this.map?.invalidateSize(), 0);
+    this.scheduleMapResize();
   }
 
   private updateMapRoute(point: RoutePoint): void {
@@ -412,30 +586,18 @@ export class App implements OnInit, OnDestroy, AfterViewInit {
       return;
     }
 
-    const latLng: L.LatLngTuple = [point.latitude, point.longitude];
+    const latLng = this.toLatLng(point);
     this.routeLine.addLatLng(latLng);
-
-    if (!this.liveMarker) {
-      this.liveMarker = L.circleMarker(latLng, {
-        radius: 8,
-        color: '#ffffff',
-        weight: 2,
-        fillColor: '#e44545',
-        fillOpacity: 1
-      }).addTo(this.map);
-    } else {
-      this.liveMarker.setLatLng(latLng);
-    }
+    this.updateLiveMarker(point);
 
     if (!this.hasCenteredOnRoute) {
-      this.map.setView(latLng, 18);
+      this.focusMapOnPoint(point, this.followZoomLevel);
       this.hasCenteredOnRoute = true;
       return;
     }
 
-    const bounds = this.routeLine.getBounds();
-    if (bounds.isValid()) {
-      this.map.fitBounds(bounds.pad(0.18), { animate: false, maxZoom: 18 });
+    if (this.followCurrentLocation()) {
+      this.focusMapOnPoint(point, this.followZoomLevel);
     }
   }
 
@@ -455,6 +617,74 @@ export class App implements OnInit, OnDestroy, AfterViewInit {
     this.map.setView(this.initialCenter, 13);
   }
 
+  private stopReviewPlayback(keepLastPointOnMap: boolean): void {
+    if (this.reviewTimerId !== null) {
+      clearInterval(this.reviewTimerId);
+      this.reviewTimerId = null;
+    }
+
+    if (!this.isReviewing()) {
+      return;
+    }
+
+    this.isReviewing.set(false);
+
+    const points = this.routePoints();
+    if (!keepLastPointOnMap || points.length === 0) {
+      return;
+    }
+
+    const lastPoint = points[points.length - 1];
+    this.reviewPointIndex.set(points.length - 1);
+    this.updateLiveMarker(lastPoint);
+  }
+
+  private updateLiveMarker(point: RoutePoint): void {
+    if (!this.map) {
+      return;
+    }
+
+    const latLng = this.toLatLng(point);
+
+    if (!this.liveMarker) {
+      this.liveMarker = L.circleMarker(latLng, {
+        radius: 8,
+        color: '#ffffff',
+        weight: 2,
+        fillColor: '#e44545',
+        fillOpacity: 1
+      }).addTo(this.map);
+    } else {
+      this.liveMarker.setLatLng(latLng);
+    }
+  }
+
+  private getCurrentMapFocusPoint(): RoutePoint | null {
+    const points = this.routePoints();
+    if (points.length === 0) {
+      return null;
+    }
+
+    if (this.isReviewing()) {
+      const index = Math.min(this.reviewPointIndex(), points.length - 1);
+      return points[index];
+    }
+
+    return points[points.length - 1];
+  }
+
+  private focusMapOnPoint(point: RoutePoint, zoom: number): void {
+    if (!this.map) {
+      return;
+    }
+
+    this.map.setView(this.toLatLng(point), zoom, { animate: true });
+  }
+
+  private toLatLng(point: RoutePoint): L.LatLngTuple {
+    return [point.latitude, point.longitude];
+  }
+
   private destroyMap(): void {
     if (this.map) {
       this.map.remove();
@@ -462,6 +692,19 @@ export class App implements OnInit, OnDestroy, AfterViewInit {
       this.routeLine = null;
       this.liveMarker = null;
     }
+  }
+
+  private setBodyScrollLock(shouldLock: boolean): void {
+    if (typeof document === 'undefined') {
+      return;
+    }
+
+    document.body.style.overflow = shouldLock ? 'hidden' : '';
+  }
+
+  private scheduleMapResize(): void {
+    setTimeout(() => this.map?.invalidateSize(), 80);
+    setTimeout(() => this.map?.invalidateSize(), 240);
   }
 
   private updateInstallState(): void {
