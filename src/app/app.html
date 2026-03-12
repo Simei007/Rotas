@@ -1,0 +1,78 @@
+<main class="page">
+  <header class="hero">
+    <h1>{{ appTitle }}</h1>
+    <p>
+      Clique em <strong>Gravar rota</strong> para iniciar a captura da localizacao em tempo real e
+      pare somente quando concluir o trajeto.
+    </p>
+  </header>
+
+  <section class="controls">
+    <button class="primary" type="button" (click)="startRecording()" [disabled]="isRecording() || !hasGeolocation">
+      Gravar rota
+    </button>
+    <button class="danger" type="button" (click)="stopRecording()" [disabled]="!isRecording()">
+      Parar
+    </button>
+    <button class="neutral" type="button" (click)="clearRoute()" [disabled]="isRecording() || pointCount() === 0">
+      Limpar
+    </button>
+  </section>
+
+  @if (!hasGeolocation) {
+    <section class="message warning">
+      Este navegador nao oferece suporte a geolocalizacao.
+    </section>
+  }
+
+  @if (errorMessage()) {
+    <section class="message error">
+      {{ errorMessage() }}
+    </section>
+  }
+
+  <section class="stats">
+    <article class="stat">
+      <h2>Status</h2>
+      <p class="value">{{ isRecording() ? 'Gravando em tempo real' : 'Parado' }}</p>
+    </article>
+    <article class="stat">
+      <h2>Pontos coletados</h2>
+      <p class="value">{{ pointCount() }}</p>
+    </article>
+    <article class="stat">
+      <h2>Distancia total</h2>
+      <p class="value">{{ formatDistance(totalDistanceMeters()) }}</p>
+    </article>
+    <article class="stat">
+      <h2>Tempo</h2>
+      <p class="value">{{ formatDuration(elapsedMs()) }}</p>
+    </article>
+  </section>
+
+  <section class="map-panel">
+    <h2>Trajeto capturado</h2>
+    <div #mapContainer class="real-map" role="img" aria-label="Mapa da rota em tempo real"></div>
+    @if (pointCount() === 0) {
+      <p class="empty map-note">Aguardando inicio da gravacao para desenhar a rota.</p>
+    }
+  </section>
+
+  <section class="details">
+    <h2>Posicoes recentes</h2>
+    @if (pointCount() === 0) {
+      <p class="empty">Nenhum ponto gravado.</p>
+    } @else {
+      <ul>
+        @for (point of recentPoints(); track point.id) {
+          <li>
+            <span>{{ formatTime(point.timestamp) }}</span>
+            <span>Lat: {{ formatCoordinate(point.latitude) }}</span>
+            <span>Lng: {{ formatCoordinate(point.longitude) }}</span>
+            <span>Precisao: {{ point.accuracy.toFixed(0) }} m</span>
+          </li>
+        }
+      </ul>
+    }
+  </section>
+</main>
