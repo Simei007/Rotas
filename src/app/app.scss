@@ -201,7 +201,8 @@ button:disabled {
 
 .real-map {
   width: 100%;
-  height: clamp(360px, 58vh, 640px);
+  height: 50vh;
+  min-height: 320px;
   border-radius: 10px;
   border: 1px solid #dbe4ec;
   overflow: hidden;
@@ -300,7 +301,8 @@ button:disabled {
   }
 
   .real-map {
-    height: min(64vh, 540px);
+    height: 50vh;
+    min-height: 280px;
   }
 
   .map-panel.expanded .real-map {
