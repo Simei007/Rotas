@@ -163,8 +163,23 @@
       (click)="$event.stopPropagation()">
       <div class="history-header">
         <h2>Trajetos salvos</h2>
-        <button class="neutral compact-btn" type="button" (click)="closeHistory()">Fechar</button>
+        <div class="history-header-actions">
+          <button
+            class="primary compact-btn"
+            type="button"
+            (click)="triggerRouteImport()"
+            [disabled]="isRecording() || isNavigating()">
+            Importar trajeto
+          </button>
+          <button class="neutral compact-btn" type="button" (click)="closeHistory()">Fechar</button>
+        </div>
       </div>
+      <input
+        #routeImportInput
+        class="file-input-hidden"
+        type="file"
+        accept=".json,application/json"
+        (change)="importNamedRouteFromFile($event)" />
 
       @if (savedRoutes().length === 0) {
         <p class="empty">Nenhum trajeto nomeado salvo.</p>
@@ -179,6 +194,9 @@
                 <span>Distancia: {{ formatDistance(route.distanceMeters) }}</span>
               </div>
               <div class="saved-route-actions">
+                <button class="neutral compact-btn" type="button" (click)="shareNamedRoute(route.id)">
+                  Compartilhar
+                </button>
                 <button class="primary compact-btn" type="button" (click)="loadNamedRoute(route.id)">Carregar</button>
                 <button class="danger compact-btn" type="button" (click)="deleteNamedRoute(route.id)">Excluir</button>
               </div>

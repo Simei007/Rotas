@@ -332,6 +332,17 @@ button:disabled {
   font-size: 1rem;
 }
 
+.history-header-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  align-items: center;
+}
+
+.file-input-hidden {
+  display: none;
+}
+
 .history-list {
   list-style: none;
   padding: 0;

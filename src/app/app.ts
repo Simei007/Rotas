@@ -51,6 +51,12 @@ interface SavedNamedRoute extends PersistedNamedRoute {
   distanceMeters: number;
 }
 
+interface NamedRouteExportFile {
+  format: 'rotas.named-route.v1';
+  exportedAt: number;
+  route: PersistedNamedRoute;
+}
+
 interface WakeLockSentinelLike {
   released: boolean;
   release(): Promise<void>;
@@ -65,6 +71,7 @@ interface WakeLockSentinelLike {
 export class App implements OnInit, OnDestroy, AfterViewInit {
   @ViewChild('mapPanel') private mapPanel?: ElementRef<HTMLElement>;
   @ViewChild('mapContainer') private mapContainer?: ElementRef<HTMLDivElement>;
+  @ViewChild('routeImportInput') private routeImportInput?: ElementRef<HTMLInputElement>;
 
   protected readonly appTitle = 'Gravador de Rotas em Tempo Real';
   protected readonly hasGeolocation = typeof navigator !== 'undefined' && 'geolocation' in navigator;
@@ -120,6 +127,7 @@ export class App implements OnInit, OnDestroy, AfterViewInit {
   private readonly navigationArrivalThresholdMeters = 20;
   private readonly storageKey = 'rotas.route-session.v1';
   private readonly namedRoutesStorageKey = 'rotas.named-routes.v1';
+  private readonly namedRouteExportFormat = 'rotas.named-route.v1';
   private readonly maxSavedRoutes = 40;
   private deferredInstallPrompt: BeforeInstallPromptEvent | null = null;
   private displayModeQuery: MediaQueryList | null = null;
@@ -469,6 +477,111 @@ export class App implements OnInit, OnDestroy, AfterViewInit {
       this.persistNamedRoutes();
     }
     this.navigationStatusMessage.set('Trajeto removido do historico salvo.');
+  }
+
+  protected async shareNamedRoute(routeId: string): Promise<void> {
+    const route = this.savedRoutes().find((item) => item.id === routeId);
+    if (!route) {
+      return;
+    }
+
+    const exportFile = this.createNamedRouteExportFile(route);
+    const shareNavigator = navigator as Navigator & {
+      share?: (data: ShareData) => Promise<void>;
+      canShare?: (data?: ShareData) => boolean;
+    };
+
+    const shareData: ShareData = {
+      title: `Trajeto ${route.name}`,
+      text: `Trajeto ${route.name} para importar no app Rotas.`,
+      files: [exportFile]
+    };
+
+    const supportsFileShare =
+      typeof shareNavigator.share === 'function' &&
+      (typeof shareNavigator.canShare !== 'function' ||
+        shareNavigator.canShare({ files: [exportFile] }));
+
+    if (supportsFileShare) {
+      try {
+        await shareNavigator.share(shareData);
+        this.errorMessage.set(null);
+        this.navigationStatusMessage.set(`Trajeto "${route.name}" compartilhado.`);
+        return;
+      } catch (error) {
+        if (error instanceof DOMException && error.name === 'AbortError') {
+          return;
+        }
+      }
+    }
+
+    this.downloadNamedRouteFile(exportFile);
+    this.errorMessage.set(null);
+    this.navigationStatusMessage.set(
+      'Compartilhamento indisponivel neste navegador. Arquivo baixado para enviar no WhatsApp.'
+    );
+  }
+
+  protected triggerRouteImport(): void {
+    if (this.isRecording() || this.isNavigating()) {
+      this.errorMessage.set('Pare a gravacao ou a navegacao antes de importar um trajeto.');
+      return;
+    }
+
+    const input = this.routeImportInput?.nativeElement;
+    if (!input) {
+      return;
+    }
+
+    input.value = '';
+    input.click();
+  }
+
+  protected async importNamedRouteFromFile(event: Event): Promise<void> {
+    const input = event.target as HTMLInputElement | null;
+    const file = input?.files?.[0];
+    if (!file) {
+      return;
+    }
+
+    try {
+      const rawText = await file.text();
+      const importedRoute = this.parseImportedNamedRoute(rawText);
+      if (!importedRoute) {
+        this.errorMessage.set(
+          'Arquivo invalido. Envie um arquivo JSON exportado pelo app Rotas.'
+        );
+        return;
+      }
+
+      const importedName = this.createUniqueRouteName(importedRoute.name);
+      const pointSeq =
+        typeof importedRoute.pointSeq === 'number' && importedRoute.pointSeq >= importedRoute.points.length
+          ? importedRoute.pointSeq
+          : importedRoute.points.length;
+
+      const routeToSave: SavedNamedRoute = {
+        id: this.createRouteId(),
+        name: importedName,
+        points: this.cloneRoutePoints(importedRoute.points),
+        startedAt: importedRoute.startedAt,
+        endedAt: importedRoute.endedAt,
+        pointSeq,
+        savedAt: Date.now(),
+        distanceMeters: this.calculateRouteDistance(importedRoute.points)
+      };
+
+      this.savedRoutes.update((routes) => [routeToSave, ...routes].slice(0, this.maxSavedRoutes));
+      this.persistNamedRoutes();
+      this.errorMessage.set(null);
+      this.navigationStatusMessage.set(`Trajeto "${importedName}" importado e salvo.`);
+    } catch {
+      this.errorMessage.set('Nao foi possivel ler o arquivo selecionado.');
+    } finally {
+      if (input) {
+        input.value = '';
+      }
+    }
   }
 
   protected async toggleMapExpanded(): Promise<void> {
@@ -1227,6 +1340,94 @@ export class App implements OnInit, OnDestroy, AfterViewInit {
 
   private cloneRoutePoints(points: RoutePoint[]): RoutePoint[] {
     return points.map((point) => ({ ...point }));
+  }
+
+  private createNamedRouteExportPayload(route: SavedNamedRoute): NamedRouteExportFile {
+    return {
+      format: this.namedRouteExportFormat,
+      exportedAt: Date.now(),
+      route: this.toPersistedNamedRoute(route)
+    };
+  }
+
+  private createNamedRouteExportFile(route: SavedNamedRoute): File {
+    const payload = this.createNamedRouteExportPayload(route);
+    const routeNamePart = this.normalizeRouteNameForFile(route.name);
+    const fileName = `trajeto-${routeNamePart}.json`;
+    return new File([JSON.stringify(payload, null, 2)], fileName, {
+      type: 'application/json'
+    });
+  }
+
+  private parseImportedNamedRoute(rawText: string): PersistedNamedRoute | null {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(rawText) as unknown;
+    } catch {
+      return null;
+    }
+
+    let candidate: unknown = parsed;
+    if (parsed && typeof parsed === 'object') {
+      const exportedPayload = parsed as Partial<NamedRouteExportFile> & { route?: unknown };
+      if (exportedPayload.format === this.namedRouteExportFormat && exportedPayload.route) {
+        candidate = exportedPayload.route;
+      }
+    }
+
+    const parsedRoute = this.parseNamedRoute(candidate);
+    if (!parsedRoute) {
+      return null;
+    }
+
+    return this.toPersistedNamedRoute(parsedRoute);
+  }
+
+  private createUniqueRouteName(baseName: string): string {
+    const sanitized = baseName.trim().slice(0, 60);
+    const initialName = sanitized.length > 0 ? sanitized : `Trajeto ${this.formatDateTime(Date.now())}`;
+    const existingNames = new Set(this.savedRoutes().map((route) => route.name.toLocaleLowerCase('pt-BR')));
+
+    if (!existingNames.has(initialName.toLocaleLowerCase('pt-BR'))) {
+      return initialName;
+    }
+
+    let suffix = 2;
+    while (true) {
+      const candidate = `${initialName} (${suffix})`;
+      if (!existingNames.has(candidate.toLocaleLowerCase('pt-BR'))) {
+        return candidate;
+      }
+      suffix += 1;
+    }
+  }
+
+  private normalizeRouteNameForFile(routeName: string): string {
+    const normalized = routeName
+      .trim()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^a-zA-Z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .toLowerCase();
+
+    return normalized.length > 0 ? normalized : 'rotas';
+  }
+
+  private downloadNamedRouteFile(file: File): void {
+    if (typeof document === 'undefined' || typeof URL === 'undefined') {
+      return;
+    }
+
+    const objectUrl = URL.createObjectURL(file);
+    const link = document.createElement('a');
+    link.href = objectUrl;
+    link.download = file.name;
+    link.rel = 'noopener';
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(objectUrl), 0);
   }
 
   private sanitizeRoutePoints(points: unknown): RoutePoint[] {
