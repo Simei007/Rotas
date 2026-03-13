@@ -37,6 +37,20 @@ interface PersistedRouteSession {
   pointSeq: number;
 }
 
+interface PersistedNamedRoute {
+  id: string;
+  name: string;
+  points: RoutePoint[];
+  startedAt: number | null;
+  endedAt: number | null;
+  pointSeq: number;
+  savedAt: number;
+}
+
+interface SavedNamedRoute extends PersistedNamedRoute {
+  distanceMeters: number;
+}
+
 interface WakeLockSentinelLike {
   released: boolean;
   release(): Promise<void>;
@@ -77,6 +91,15 @@ export class App implements OnInit, OnDestroy, AfterViewInit {
   protected readonly wakeLockMessage = signal<string | null>(null);
   protected readonly voiceGuidanceEnabled = signal(true);
   protected readonly isHistoryOpen = signal(false);
+  protected readonly routeNameDraft = signal('');
+  protected readonly savedRoutes = signal<SavedNamedRoute[]>([]);
+  protected readonly canSaveNamedRoute = computed(
+    () =>
+      this.routePoints().length > 0 &&
+      this.routeNameDraft().trim().length > 0 &&
+      !this.isRecording() &&
+      !this.isNavigating()
+  );
 
   private readonly startedAt = signal<number | null>(null);
   private readonly endedAt = signal<number | null>(null);
@@ -96,6 +119,8 @@ export class App implements OnInit, OnDestroy, AfterViewInit {
   private readonly reviewTickMs = 700;
   private readonly navigationArrivalThresholdMeters = 20;
   private readonly storageKey = 'rotas.route-session.v1';
+  private readonly namedRoutesStorageKey = 'rotas.named-routes.v1';
+  private readonly maxSavedRoutes = 40;
   private deferredInstallPrompt: BeforeInstallPromptEvent | null = null;
   private displayModeQuery: MediaQueryList | null = null;
   private wakeLockSentinel: WakeLockSentinelLike | null = null;
@@ -247,6 +272,7 @@ export class App implements OnInit, OnDestroy, AfterViewInit {
   });
 
   ngOnInit(): void {
+    this.restoreNamedRoutes();
     this.restorePersistedSession();
     this.updateInstallState();
     this.installPlatform.set(this.detectInstallPlatform());
@@ -352,6 +378,97 @@ export class App implements OnInit, OnDestroy, AfterViewInit {
   protected closeHistory(): void {
     this.isHistoryOpen.set(false);
     this.updateBodyScrollLockState();
+  }
+
+  protected updateRouteNameDraftFromEvent(event: Event): void {
+    const target = event.target as HTMLInputElement | null;
+    this.routeNameDraft.set(target?.value ?? '');
+  }
+
+  protected saveNamedRoute(): void {
+    if (!this.canSaveNamedRoute()) {
+      return;
+    }
+
+    const routeName = this.routeNameDraft().trim();
+    if (routeName.length === 0) {
+      this.errorMessage.set('Digite um nome para salvar o trajeto.');
+      return;
+    }
+
+    const points = this.cloneRoutePoints(this.routePoints());
+    if (points.length === 0) {
+      return;
+    }
+
+    const now = Date.now();
+    const savedRoute: SavedNamedRoute = {
+      id: this.createRouteId(),
+      name: routeName,
+      points,
+      startedAt: this.startedAt(),
+      endedAt: this.endedAt(),
+      pointSeq: Math.max(this.pointSeq, points.length),
+      savedAt: now,
+      distanceMeters: this.calculateRouteDistance(points)
+    };
+
+    this.savedRoutes.update((routes) => [savedRoute, ...routes].slice(0, this.maxSavedRoutes));
+    this.persistNamedRoutes();
+    this.routeNameDraft.set('');
+    this.errorMessage.set(null);
+    this.navigationStatusMessage.set(`Trajeto "${routeName}" salvo no historico local.`);
+  }
+
+  protected loadNamedRoute(routeId: string): void {
+    if (this.isRecording()) {
+      this.errorMessage.set('Pare a gravacao antes de carregar um trajeto salvo.');
+      return;
+    }
+
+    const route = this.savedRoutes().find((item) => item.id === routeId);
+    if (!route) {
+      return;
+    }
+
+    this.stopReviewPlayback(false);
+    this.stopNavigation(false);
+    this.cancelSpeech();
+
+    const restoredPoints = this.cloneRoutePoints(route.points);
+    this.routePoints.set(restoredPoints);
+    this.pointSeq =
+      typeof route.pointSeq === 'number' && route.pointSeq >= restoredPoints.length
+        ? route.pointSeq
+        : restoredPoints.length;
+    this.reviewPointIndex.set(0);
+    this.navigationPointIndex.set(0);
+    this.startedAt.set(route.startedAt);
+    this.endedAt.set(route.startedAt !== null && route.endedAt === null ? Date.now() : route.endedAt);
+    this.now.set(Date.now());
+    this.errorMessage.set(null);
+    this.navigationStatusMessage.set(`Trajeto "${route.name}" carregado.`);
+    this.resetMapRoute();
+    this.hydrateMapFromStoredRoute();
+    this.persistSession();
+    this.closeHistory();
+  }
+
+  protected deleteNamedRoute(routeId: string): void {
+    const current = this.savedRoutes();
+    const next = current.filter((route) => route.id !== routeId);
+
+    if (next.length === current.length) {
+      return;
+    }
+
+    this.savedRoutes.set(next);
+    if (next.length === 0) {
+      this.clearNamedRoutesStorage();
+    } else {
+      this.persistNamedRoutes();
+    }
+    this.navigationStatusMessage.set('Trajeto removido do historico salvo.');
   }
 
   protected async toggleMapExpanded(): Promise<void> {
@@ -639,6 +756,16 @@ export class App implements OnInit, OnDestroy, AfterViewInit {
       hour: '2-digit',
       minute: '2-digit',
       second: '2-digit'
+    });
+  }
+
+  protected formatDateTime(timestamp: number): string {
+    return new Date(timestamp).toLocaleString('pt-BR', {
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit'
     });
   }
 
@@ -1090,6 +1217,157 @@ export class App implements OnInit, OnDestroy, AfterViewInit {
     await this.releaseWakeLock();
   }
 
+  private createRouteId(): string {
+    if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+      return crypto.randomUUID();
+    }
+
+    return `route-${Date.now()}-${Math.floor(Math.random() * 1_000_000)}`;
+  }
+
+  private cloneRoutePoints(points: RoutePoint[]): RoutePoint[] {
+    return points.map((point) => ({ ...point }));
+  }
+
+  private sanitizeRoutePoints(points: unknown): RoutePoint[] {
+    if (!Array.isArray(points)) {
+      return [];
+    }
+
+    return points
+      .filter((point) => {
+        const candidate = point as Partial<RoutePoint>;
+        return (
+          Number.isFinite(candidate.latitude) &&
+          Number.isFinite(candidate.longitude) &&
+          Number.isFinite(candidate.timestamp)
+        );
+      })
+      .map((point, index) => {
+        const candidate = point as Partial<RoutePoint>;
+        const speed = candidate.speed;
+        return {
+          id: typeof candidate.id === 'number' ? candidate.id : index + 1,
+          latitude: Number(candidate.latitude),
+          longitude: Number(candidate.longitude),
+          accuracy: Number.isFinite(candidate.accuracy) ? Number(candidate.accuracy) : 0,
+          speed: typeof speed === 'number' && !Number.isNaN(speed) ? speed : null,
+          timestamp: Number(candidate.timestamp)
+        };
+      });
+  }
+
+  private calculateRouteDistance(points: RoutePoint[]): number {
+    if (points.length < 2) {
+      return 0;
+    }
+
+    let totalDistance = 0;
+    for (let i = 1; i < points.length; i += 1) {
+      totalDistance += this.haversineMeters(points[i - 1], points[i]);
+    }
+    return totalDistance;
+  }
+
+  private toPersistedNamedRoute(route: SavedNamedRoute): PersistedNamedRoute {
+    return {
+      id: route.id,
+      name: route.name,
+      points: this.cloneRoutePoints(route.points),
+      startedAt: route.startedAt,
+      endedAt: route.endedAt,
+      pointSeq: route.pointSeq,
+      savedAt: route.savedAt
+    };
+  }
+
+  private parseNamedRoute(candidate: unknown): SavedNamedRoute | null {
+    if (!candidate || typeof candidate !== 'object') {
+      return null;
+    }
+
+    const value = candidate as Partial<PersistedNamedRoute>;
+    if (typeof value.id !== 'string' || typeof value.name !== 'string') {
+      return null;
+    }
+
+    const name = value.name.trim();
+    if (name.length === 0) {
+      return null;
+    }
+
+    const points = this.sanitizeRoutePoints(value.points);
+    if (points.length === 0) {
+      return null;
+    }
+
+    const pointSeq =
+      typeof value.pointSeq === 'number' && value.pointSeq >= points.length
+        ? value.pointSeq
+        : points.length;
+
+    return {
+      id: value.id,
+      name,
+      points,
+      startedAt: typeof value.startedAt === 'number' ? value.startedAt : null,
+      endedAt: typeof value.endedAt === 'number' ? value.endedAt : null,
+      pointSeq,
+      savedAt: typeof value.savedAt === 'number' ? value.savedAt : Date.now(),
+      distanceMeters: this.calculateRouteDistance(points)
+    };
+  }
+
+  private persistNamedRoutes(): void {
+    if (typeof localStorage === 'undefined') {
+      return;
+    }
+
+    const payload = this.savedRoutes().map((route) => this.toPersistedNamedRoute(route));
+
+    try {
+      localStorage.setItem(this.namedRoutesStorageKey, JSON.stringify(payload));
+    } catch {
+      this.errorMessage.set('Falha ao salvar os trajetos nomeados localmente.');
+    }
+  }
+
+  private clearNamedRoutesStorage(): void {
+    if (typeof localStorage === 'undefined') {
+      return;
+    }
+
+    localStorage.removeItem(this.namedRoutesStorageKey);
+  }
+
+  private restoreNamedRoutes(): void {
+    if (typeof localStorage === 'undefined') {
+      return;
+    }
+
+    const rawNamedRoutes = localStorage.getItem(this.namedRoutesStorageKey);
+    if (!rawNamedRoutes) {
+      return;
+    }
+
+    try {
+      const parsed = JSON.parse(rawNamedRoutes) as unknown;
+      if (!Array.isArray(parsed)) {
+        return;
+      }
+
+      const restored = parsed
+        .map((entry) => this.parseNamedRoute(entry))
+        .filter((entry): entry is SavedNamedRoute => entry !== null)
+        .sort((first, second) => second.savedAt - first.savedAt)
+        .slice(0, this.maxSavedRoutes);
+
+      this.savedRoutes.set(restored);
+    } catch {
+      this.clearNamedRoutesStorage();
+    }
+  }
+
   private persistSession(): void {
     if (typeof localStorage === 'undefined') {
       return;
@@ -1129,16 +1407,7 @@ export class App implements OnInit, OnDestroy, AfterViewInit {
 
     try {
       const parsed = JSON.parse(rawSession) as PersistedRouteSession;
-      if (!Array.isArray(parsed.points)) {
-        return;
-      }
-
-      const restoredPoints = parsed.points.filter(
-        (point) =>
-          Number.isFinite(point.latitude) &&
-          Number.isFinite(point.longitude) &&
-          Number.isFinite(point.timestamp)
-      );
+      const restoredPoints = this.sanitizeRoutePoints(parsed.points);
 
       this.routePoints.set(restoredPoints);
       this.pointSeq =

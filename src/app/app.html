@@ -75,6 +75,19 @@
           </button>
         }
       </div>
+      <div class="save-route-row">
+        <input
+          class="save-route-input"
+          type="text"
+          [value]="routeNameDraft()"
+          (input)="updateRouteNameDraftFromEvent($event)"
+          [disabled]="isRecording() || isNavigating()"
+          maxlength="60"
+          placeholder="Nome do trajeto (ex: Centro para bairro)" />
+        <button class="primary compact-btn" type="button" (click)="saveNamedRoute()" [disabled]="!canSaveNamedRoute()">
+          Salvar trajeto
+        </button>
+      </div>
     </details>
 
     <div class="status-strip">
@@ -146,27 +159,51 @@
       class="history-modal"
       role="dialog"
       aria-modal="true"
-      aria-label="Historico de posicoes"
+      aria-label="Historico de trajetos"
       (click)="$event.stopPropagation()">
       <div class="history-header">
-        <h2>Historico de posicoes</h2>
+        <h2>Trajetos salvos</h2>
         <button class="neutral compact-btn" type="button" (click)="closeHistory()">Fechar</button>
       </div>
 
-      @if (pointCount() === 0) {
-        <p class="empty">Nenhum ponto gravado.</p>
+      @if (savedRoutes().length === 0) {
+        <p class="empty">Nenhum trajeto nomeado salvo.</p>
       } @else {
-        <ul class="history-list">
-          @for (point of historyPoints(); track point.id) {
+        <ul class="saved-routes-list">
+          @for (route of savedRoutes(); track route.id) {
             <li>
-              <span>{{ formatTime(point.timestamp) }}</span>
-              <span>Lat: {{ formatCoordinate(point.latitude) }}</span>
-              <span>Lng: {{ formatCoordinate(point.longitude) }}</span>
-              <span>Precisao: {{ point.accuracy.toFixed(0) }} m</span>
+              <div class="saved-route-meta">
+                <strong>{{ route.name }}</strong>
+                <span>Salvo em {{ formatDateTime(route.savedAt) }}</span>
+                <span>Pontos: {{ route.points.length }}</span>
+                <span>Distancia: {{ formatDistance(route.distanceMeters) }}</span>
+              </div>
+              <div class="saved-route-actions">
+                <button class="primary compact-btn" type="button" (click)="loadNamedRoute(route.id)">Carregar</button>
+                <button class="danger compact-btn" type="button" (click)="deleteNamedRoute(route.id)">Excluir</button>
+              </div>
             </li>
           }
         </ul>
       }
+
+      <details class="history-points" [open]="pointCount() > 0">
+        <summary>Pontos da rota atual</summary>
+        @if (pointCount() === 0) {
+          <p class="empty">Nenhum ponto gravado na rota atual.</p>
+        } @else {
+          <ul class="history-list">
+            @for (point of historyPoints(); track point.id) {
+              <li>
+                <span>{{ formatTime(point.timestamp) }}</span>
+                <span>Lat: {{ formatCoordinate(point.latitude) }}</span>
+                <span>Lng: {{ formatCoordinate(point.longitude) }}</span>
+                <span>Precisao: {{ point.accuracy.toFixed(0) }} m</span>
+              </li>
+            }
+          </ul>
+        }
+      </details>
     </article>
   </section>
 }
