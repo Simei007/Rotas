@@ -713,8 +713,12 @@ export class App implements OnInit, OnDestroy, AfterViewInit {
     this.navigationStatusMessage.set('Navegacao iniciada. Aguarde sinal de localizacao.');
     this.isNavigating.set(true);
     this.navigationInitialized = false;
-    this.cancelSpeech();
-    this.speakMessage(`Navegacao ${direction === 'forward' ? 'de ida' : 'de volta'} iniciada.`);
+
+    // Ajusta a orientação do mapa com base na direção
+    this.adjustMapOrientation(direction);
+
+    // Ajusta a fala para evitar interrupções
+    this.speakMessage(`Navegação ${direction === 'forward' ? 'de ida' : 'de volta'} iniciada.`);
     void this.requestWakeLock();
 
     try {
@@ -728,8 +732,16 @@ export class App implements OnInit, OnDestroy, AfterViewInit {
         }
       );
     } catch {
-      this.navigationStatusMessage.set('Nao foi possivel iniciar a navegacao neste dispositivo.');
+      this.navigationStatusMessage.set('Não foi possível iniciar a navegação neste dispositivo.');
       this.stopNavigation(false);
+    }
+  }
+
+  private adjustMapOrientation(direction: NavigationDirection): void {
+    const mapElement = this.mapPanel?.nativeElement;
+    if (mapElement) {
+      const rotationAngle = direction === 'forward' ? 0 : 180;
+      mapElement.style.transform = `rotate(${rotationAngle}deg)`;
     }
   }
 
