@@ -230,54 +230,22 @@
   .route-line {
     stroke-width: 5px; /* Aumenta a espessura da linha */
   }
-
-  .rotating-wheel {
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    position: relative;
-    width: 300px;
-    height: 300px;
-    border: 2px solid #ccc;
-    border-radius: 50%;
-    margin: 20px auto;
-  }
-
-  .rotating-wheel button {
-    position: absolute;
-    width: 60px;
-    height: 60px;
-    border-radius: 50%;
-    border: none;
-    background-color: #007bff;
-    color: white;
-    font-size: 12px;
-    cursor: pointer;
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-    transition: transform 0.3s, background-color 0.3s;
-  }
-
-  .rotating-wheel button:hover {
-    background-color: #0056b3;
-    transform: scale(1.1);
-  }
-
-  .rotating-wheel .btn-1 { top: 10%; left: 50%; transform: translate(-50%, -50%); }
-  .rotating-wheel .btn-2 { top: 30%; left: 85%; transform: translate(-50%, -50%); }
-  .rotating-wheel .btn-3 { top: 70%; left: 85%; transform: translate(-50%, -50%); }
-  .rotating-wheel .btn-4 { top: 90%; left: 50%; transform: translate(-50%, -50%); }
-  .rotating-wheel .btn-5 { top: 70%; left: 15%; transform: translate(-50%, -50%); }
-  .rotating-wheel .btn-6 { top: 30%; left: 15%; transform: translate(-50%, -50%); }
 </style>
 
-<div class="rotating-wheel" style="margin-top: 50px;">
-  <button class="btn-1" (click)="startNavigation('forward')">Ida</button>
-  <button class="btn-2" (click)="toggleFollowCurrentLocation()">Seguir</button>
-  <button class="btn-3" (click)="stopNavigation()">Parar</button>
-  <button class="btn-4" (click)="startNavigation('reverse')">Volta</button>
-  <button class="btn-5" (click)="toggleMapExpanded()">Mapa</button>
-  <button class="btn-6" (click)="startReview()">Revisar</button>
+<div class="bar-actions">
+  <button class="primary compact-btn" type="button" (click)="startNavigation('forward')" [disabled]="!canNavigateRoute()">
+    Navegar ida
+  </button>
+  <button class="neutral compact-btn" type="button" (click)="toggleFollowCurrentLocation()">
+    Seguir localizacao
+  </button>
+  <button class="danger compact-btn" type="button" (click)="stopNavigation()" [disabled]="!isNavigating()">
+    Parar navegacao
+  </button>
+  <button class="neutral compact-btn" type="button" (click)="toggleMapExpanded()">
+    Maximizar mapa
+  </button>
+  <button class="primary compact-btn" type="button" (click)="startReview()" [disabled]="!canReviewRoute()">
+    Rever gravacao
+  </button>
 </div>
