@@ -742,6 +742,9 @@ export class App implements OnInit, OnDestroy, AfterViewInit {
     if (mapElement) {
       const rotationAngle = direction === 'forward' ? 0 : 180;
       mapElement.style.transform = `rotate(${rotationAngle}deg)`;
+      console.log(`Rotação aplicada: ${rotationAngle} graus`);
+    } else {
+      console.warn('Elemento mapPanel não encontrado.');
     }
   }
 
