@@ -311,6 +311,25 @@ export class App implements OnInit, OnDestroy, AfterViewInit {
   ngAfterViewInit(): void {
     this.initializeMap();
     this.hydrateMapFromStoredRoute();
+
+    // Remove buttons below the map
+    this.removeMapButtons();
+  }
+
+  private removeMapButtons(): void {
+    const mapElement = this.mapPanel?.nativeElement;
+    if (mapElement) {
+      const buttons = mapElement.querySelectorAll('.map-button');
+      buttons.forEach((button) => button.remove());
+    }
+  }
+
+  private adjustMapOrientationToNorth(): void {
+    const mapElement = this.mapPanel?.nativeElement;
+    if (mapElement) {
+      mapElement.style.transform = 'rotate(0deg)';
+      console.log('Map orientation adjusted to North.');
+    }
   }
 
   ngOnDestroy(): void {
@@ -638,6 +657,7 @@ export class App implements OnInit, OnDestroy, AfterViewInit {
     const currentPoint = this.getCurrentMapFocusPoint();
     if (currentPoint) {
       this.focusMapOnPoint(currentPoint, this.followZoomLevel);
+      this.adjustMapOrientationToNorth();
       return;
     }
 
@@ -649,6 +669,7 @@ export class App implements OnInit, OnDestroy, AfterViewInit {
       (position) => {
         const latLng: L.LatLngTuple = [position.coords.latitude, position.coords.longitude];
         this.map?.setView(latLng, this.followZoomLevel, { animate: true });
+        this.adjustMapOrientationToNorth();
       },
       () => {
         this.errorMessage.set('Nao foi possivel centralizar na localizacao atual.');
